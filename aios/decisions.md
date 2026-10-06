@@ -1,5 +1,8 @@
 # Decision log (AIOS) — newest first. Why we chose X, so nobody re-litigates it.
 
+## 2026-10-04 — Grafana password rotation is end-of-project, not a blocker
+Chad: Grafana `admin`/`admin` is not a blocker for any of this work and should not be tracked on the critical path — it gets done at the very end. Issue #4 closed (labeled `prio:parked`). The secrets critical path is the **Infisical-internal** items (AUTH_SECRET, Postgres password, ENCRYPTION_KEY) + the Cloudflare token, not Grafana.
+
 ## 2026-10-04 — Work tracking moves to GitHub Issues + a manager agent
 Use **GitHub Issues** on `ChadEngel/ce-aios` as the durable work queue (labels + milestones), and build a **manager agent** to groom/dispatch it. Rationale: auditable, versioned, lives with the docs, no new database. Manager runs **Phase 0 now** as an in-session `gh` protocol (R0 read / R1 label+comment, never closes or executes); Phase 1 (autonomous in-cluster service, GitHub App auth) is blocked on the tool plane. GitHub Actions rejected as the runtime (would need an LLM key as a GitHub secret; Bifrost is LAN-only). Detail: `roadmap/manager-agent.md`.
 

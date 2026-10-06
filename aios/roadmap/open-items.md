@@ -7,7 +7,7 @@ Status key: OPEN · BLOCKED · NEXT · PARKED · DONE?
 ## P0 — Level 2: secrets + Influx (prerequisite for every agent)
 | ID | Item | Status | Notes |
 |---|---|---|---|
-| S1 | Rotate Grafana admin password (`admin`/`admin` is LIVE) | NEXT | runbook: ce-ai-lab `docs/rotate-placeholder-credentials.md`; then move to an InfisicalSecret sync |
+| S1 | Rotate Grafana admin password (`admin`/`admin` is LIVE) | PARKED — end of project | **Not a blocker, not tracked in the current push** (Chad 2026-10-04). Handled at the very end. Issue #4 closed with this note. |
 | S2 | Rotate Infisical AUTH_SECRET | OPEN | logs everyone out |
 | S3 | Rotate Infisical Postgres password (update POSTGRES_PASSWORD **and** DB_CONNECTION_URI) | OPEN | brief downtime |
 | S4 | Rotate Infisical ENCRYPTION_KEY | OPEN | **destructive**: export all secrets first, verify backup, human-executed |

@@ -5,7 +5,7 @@
 - Added `roadmap/manager-agent.md`; decided manager **Phase 0 = in-session `gh` protocol** (no runtime needed), Phase 1 blocked on the tool plane.
 - Answered "do I need something to run these agents?": yes — the **tool/execution plane** is missing (mcpo blocked on unpublished image; test Bifrost native MCP first). Logged T1–T3.
 - InfluxDB migration corrected to **DEFERRED / not a blocker** (earlier DONE note was wrong).
-- **Where we left off:** backlog live; recommended next actions = S1 (rotate Grafana admin) and T1 (Bifrost MCP spike). T2 needs Chad's runtime-placement decision.
+- **Where we left off:** backlog live; recommended next action = T1 (Bifrost MCP spike). T2 needs Chad's runtime-placement decision. Grafana password deferred to end (not tracked, not a blocker — #4 closed).
 
 ## 2026-10-04 (session 2)
 - Re-scanned ce-ai-lab: Influx migration still not cut over; four placeholder credentials still live; Tailscale HA, UniFi DR, syslog receiver shipped. Updated context.md.
