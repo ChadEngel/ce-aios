@@ -32,7 +32,7 @@ Real, working, GitOps-managed self-hosted AI platform:
 - History note: a Cloudflare token, an InfluxDB token, and TLS keys were leaked in old git history and have been rotated; git history was rewritten.
 
 **Active/half-finished work (checked 2026-10-04 against the live repo — still open):**
-- **InfluxDB migration** off `aiserver.home` into the k3s cluster — still not finished. The in-cluster `influxdb` manifests from July still exist, but the live Services table and README/MONITORING docs still treat InfluxDB as external (`aiserver.home:8086`). Likely still stuck on the same blocker (an All-Access token that has to be pulled manually from the `aiserver` web UI) — or just never resumed.
+- **InfluxDB migration** off `aiserver.home` into the k3s cluster — **NOT cut over; deferred.** Confirmed by Chad 2026-10-04: it's working as-is and is **not a blocker** — do not treat it as an open priority or re-open it. (In-cluster `influxdb` manifests exist and a status doc references a 2026-07-28 migration, but the live cutover has not happened.)
 - **Secrets consolidation** — worse than "not 100%": an August audit found **four live placeholder credentials** in production that were never rotated — Grafana `admin`/`admin`, and three Infisical-internal secrets (`AUTH_SECRET`, `ENCRYPTION_KEY`, the Postgres password). A full rotation runbook exists (`docs/rotate-placeholder-credentials.md`) but none of the four steps have been executed. The Cloudflare API token leaked in old git history is also still unrotated at the provider (repo history was cleaned, but the live token itself wasn't swapped).
 
 **New since August (shipped, not part of the original Level 2 target):**
@@ -42,7 +42,7 @@ Real, working, GitOps-managed self-hosted AI platform:
 - A UDM Pro config backup/replacement effort — a full UDM export snapshot exists locally (gitignored, correctly never committed) dated 2026-09-26, and the README now references a `UDM_REPLACEMENT.md` runbook — but that file doesn't actually exist in the repo yet. Loose end to close or clarify.
 - A few more app folders exist (`postgres`, `redis` — Infisical's own backing store; `pushover-bridge`, `synthetic-monitor`, `udm-thermal`) that aren't listed in the Services status table — unclear if they're actually deployed or just scaffolded.
 
-**Pattern check:** this is the same shape Level 1 surfaced in August — new, interesting builds (Tailscale HA, UniFi DR, the syslog-ng relay) got finished, while the explicitly-named priority (Influx + secrets) sat untouched and even grew a bit worse (the placeholder-credential audit). Worth naming plainly rather than letting it slide again.
+**Pattern check:** this is the same shape Level 1 surfaced in August — new, interesting builds (Tailscale HA, UniFi DR, the syslog-ng relay) got finished, while the explicitly-named priority (secrets consolidation) sat untouched and even grew a bit worse (the placeholder-credential audit). Worth naming plainly rather than letting it slide again.
 
 ## 4. Other active threads
 
@@ -54,7 +54,7 @@ Real, working, GitOps-managed self-hosted AI platform:
 
 ## 5. Level 2 target (current focus)
 
-**Finish the InfluxDB migration and close every remaining secrets gap into Infisical — treated as one project.**
+**Close every remaining secrets gap into Infisical.** (InfluxDB is explicitly out of scope here — deferred, working as-is, not a blocker.)
 
 Why this, not the Lauren project or the boat:
 1. It's nearly done, not a new start — the lowest-risk way to actually prove the finishing muscle works, which matters more than any new feature.
@@ -70,7 +70,7 @@ As of 2026, checked against current sources (not stale training-data assumptions
 ## 7. Level status
 
 - **Level 1 (Discovery):** complete.
-- **Level 2 (The Big Win):** target named Aug 17, still open as of the Oct 4 check-in — InfluxDB migration + full Infisical secrets consolidation. Not regressed, but not advanced either, while other new infra shipped instead (see §3).
+- **Level 2 (The Big Win):** target named Aug 17. Remaining scope = full Infisical secrets consolidation (the four live placeholder credentials). InfluxDB migration is **deferred, not a blocker** (working as-is). Still open as of the Oct 4 check-in — not advanced, while other new infra shipped instead (see §3).
 - **Level 3 (Personal Claude / persistent context):** this file. Note: it sat unopened/unedited for the ~7 weeks between Aug 17 and Oct 4 — real infra work happened in that window that this file didn't capture until the Oct 4 check-in. If this file isn't the thing being updated as work happens, it will drift stale again; treat a "what's left / where are we" question as a trigger to re-check the live repo, not just re-read this file.
 - **Level 4 (First Automation):** not started.
 - **Level 5 (AIOS Foundation):** not started.

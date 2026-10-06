@@ -1,5 +1,7 @@
 # Open items (priority order) — refreshed 2026-10-04
 
+> **Live queue moved to GitHub Issues** (`ChadEngel/ce-aios`) — see `manager-agent.md`. The tables below are the human-readable mirror; if they disagree with the issue tracker, **the issues win**.
+
 Status key: OPEN · BLOCKED · NEXT · PARKED · DONE?
 
 ## P0 — Level 2: secrets + Influx (prerequisite for every agent)
@@ -15,7 +17,7 @@ Status key: OPEN · BLOCKED · NEXT · PARKED · DONE?
 | S8 | Revoke bootstrap Infisical service token once CLI admin no longer needed | OPEN | optional |
 | S9 | Delete old `influx-metrics-pusher` Job (plaintext write token in spec) and rotate INFLUXDB_TOKEN after cutover | OPEN | |
 | S10 | Canonicalize Infisical project names across docs | OPEN | |
-| I1 | InfluxDB migration aiserver→cluster (backup/restore needs an All-Access token from aiserver UI; consider `local-path` vs NFS for TSDB) | OPEN | status doc untouched since 07-27; manifests exist, not cut over |
+| I1 | InfluxDB migration aiserver→cluster | DEFERRED | Chad 2026-10-04: **not cut over**; working as-is; **not a blocker** — don't treat as an open priority. |
 
 ## P1 — AI IT team
 | ID | Item | Status |
@@ -28,6 +30,13 @@ Status key: OPEN · BLOCKED · NEXT · PARKED · DONE?
 
 ## P2 — network (home-network-config)
 Segmentation plan phases 0–6 not started; firewall is allow-all. Pending decisions: HA placement, Sonos VLAN, Droplet-7B40 → VLAN 30, printer, Netgear walkthrough, NAS eth0 → VLAN 50, rename VLAN 40/50, retire VLAN 2/DVR. Planned rules must carve out Lab→HA, Lab→UDM API for the agents/unpoller/udm-thermal.
+
+## P2 — personal agents (added 2026-10-04; gated on Level 2, see `personal-agents.md`)
+| ID | Item | Status |
+|---|---|---|
+| PA1 | Scheduler agent — bundle with helpdesk Graph/Entra work; scope calendar(s), R0 vs R1 | OPEN |
+| PA2 | Travel agent — first real job = MSP→OGG Mar 2027; pick award-search tool | PARKED until a trip is live |
+| PA3 | Financial planner — data-source decision (manual/aggregator/brokerage) gates everything | PARKED (highest risk, build last) |
 
 ## P2 — documentation drift
 UDM_REPLACEMENT.md missing · duplicate syslog-receiver · DEPLOYMENT_STATUS stale header + services table lacks postgres/redis/pushover-bridge/synthetic-monitor/udm-thermal/influxdb · stale LiteLLM leftovers to delete · broken openwebui production overlay · SETUP.md TODOs (Ollama/AIbeast install doc, util-server VM doc) · reconcile `aiserver.home`/AIbeast naming · stale `.60` in firewall group.
@@ -42,3 +51,5 @@ Lauren AI-literacy workspace (build for one kid first; not a business yet) · We
 4. Confirm agent runtime placement: Docker Compose on the Mac Studio (leaning) vs in-cluster.
 5. What is "Azure Plan 2" — an Azure subscription (needed for Azure Bot), or Entra ID P2? Is there an active subscription?
 6. Which mailbox should the helpdesk agent work on — your primary, or a dedicated one (safer)?
+7. Scheduler: which calendar(s) — personal only, or family/shared too? Propose changes (R1) from day one or read-only trial?
+8. Finance: intended data source — manual/spreadsheet vs aggregator (Plaid/SimpleFIN) vs brokerage API?

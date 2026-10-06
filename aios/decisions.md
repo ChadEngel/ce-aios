@@ -1,5 +1,14 @@
 # Decision log (AIOS) — newest first. Why we chose X, so nobody re-litigates it.
 
+## 2026-10-04 — Work tracking moves to GitHub Issues + a manager agent
+Use **GitHub Issues** on `ChadEngel/ce-aios` as the durable work queue (labels + milestones), and build a **manager agent** to groom/dispatch it. Rationale: auditable, versioned, lives with the docs, no new database. Manager runs **Phase 0 now** as an in-session `gh` protocol (R0 read / R1 label+comment, never closes or executes); Phase 1 (autonomous in-cluster service, GitHub App auth) is blocked on the tool plane. GitHub Actions rejected as the runtime (would need an LLM key as a GitHub secret; Bifrost is LAN-only). Detail: `roadmap/manager-agent.md`.
+
+## 2026-10-04 — InfluxDB migration DEFERRED (working as-is, not a blocker)
+Chad: the aiserver→cluster InfluxDB migration is **not cut over**, but it is working as-is and should **not** be treated as an open priority or a blocker. Level 2 remaining scope = Infisical secrets consolidation only. Do not re-litigate Influx placement unless Chad raises it.
+
+## 2026-10-04 — Personal agent roster added (scheduler, travel, financial)
+Beyond the IT team, add a *personal* roster on the same platform: scheduler, vacation/travel agent, financial planner. Not IT — life admin — but same prerequisites (Level 2, per-agent Infisical identity, Entra app per agent, R0→R2). Recommended order: scheduler bundled with the helpdesk Graph work (protects family time + attacks the finishing problem), travel episodic (first real job = March 2027 MSP→OGG), financial last and R0-only (highest risk; data source unconfirmed). Flagged once: three new threads compete with Level 2 — park travel/finance until Level 2 closes. Detail: `roadmap/personal-agents.md`.
+
 ## 2026-10-04 — Tenant confirmed: personal `engelmn.com` (M365 Business Premium)
 Chad confirmed the tenant is personal, with Teams licensing and "Azure Plan 2" (meaning TBD). Employer tenant remains off-limits. Per-agent Entra app registrations, mailbox-scoped, no send/delete; Teams two-way via Azure Bot only after outbound-only phase. Chad creates registrations. See `roadmap/ai-it-team.md`.
 
