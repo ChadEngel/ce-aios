@@ -1,27 +1,33 @@
 # T4 — NOC MCP client + per-agent Virtual Keys (design for review)
 
-**Status:** R1 proposal. **Nothing applied.** Two findings below change the sequence — one is a hard blocker.
+**Status:** R1 proposal. **Nothing applied.** Corrected 2026-10-04 (see Finding 1).
 **Related:** spike #14 (`bifrost-mcp-spike.md`), issue #30, milestone *Tool plane / agent runtime*.
 
 ---
 
-## Finding 1 (BLOCKER) — Bifrost refuses MCP clients pointing at private addresses without dashboard auth
+## Finding 1 (CORRECTED) — private-network MCP clients ARE supported; my earlier "blocker" was wrong
 
-**Reproduced against the live instance (read-safe probe, nothing created):**
-```
-POST /api/mcp/client
-{"name":"zz-probe","connection_type":"http",
- "connection_string":"http://127.0.0.1:9/mcp","auth_type":"none"}
-→ 403 unauthenticated callers cannot register MCP clients that connect to
-      loopback, private-network, or link-local addresses; set an admin password
-```
-Every lab service (Grafana, Loki, Influx, `mcp-grafana`) is on an RFC1918 address. So **no MCP client can be registered until Bifrost dashboard auth (admin password) is enabled.** This is by design (a security guard in Bifrost), not a bug.
+**Correction (2026-10-04, after Chad pushed back and I read the source).** I initially called this a hard blocker. It is not. Bifrost explicitly supports private/loopback MCP targets with dashboard auth disabled — via **`config.json`**.
 
-Corroborating state:
-- `/api/config` → `onboarding_skipped: ["cors","dashboard-auth","enforce-inference-auth"]`, `enforce_auth_on_inference: false`.
-- Setting the admin password requires a **setup token** on Bifrost ≥ 2.0.0-prerelease3 (`BIFROST_SETUP_TOKEN` env or `setup_token` in `config.json`). We are on **v2.2.3**, so this applies.
+What the guard actually does (`transports/bifrost-http/handlers/mcp.go`, `rejectPrivateMCPTargetIfAuthBypassed`):
+- It fires **only** on the **HTTP management API** (`POST /api/mcp/client`).
+- And **only** when `BifrostContextKeyAuthBypassed == true` (dashboard auth off).
+- The gate is on *the credential check*, not on the capability. Source comment: *"A genuinely authenticated admin keeps the documented ability to point an MCP client at a local or private server."* Guard test `TestRejectPrivateMCPTargetIfAuthBypassed_AuthenticatedLoopbackAllowed` asserts exactly this.
+- The **`config.json` startup path never calls the guard.** `loadMCPConfig` (`lib/config.go:1850`) processes `mcp.client_configs` and calls `CreateMCPClientConfig` (`lib/config.go:1924`) directly — no SSRF pre-check.
 
-**Consequence:** T4 cannot execute before this is done. Chad does it (it's an admin action, R2/human). It also happens to close the "no auth gate on tool execution" hole flagged in the spike — the two fixes are the same change.
+**Docs confirm it** (`docs/mcp/connecting-to-servers.mdx:227`):
+> *"…an HTTP or SSE client whose `connection_string` resolves to a loopback, private-network, link-local, or CGNAT address is refused — you must either enable dashboard auth and authenticate first, **or define the client in `config.json` instead**."*
+
+The same note applies to STDIO (`:203`) — *"Enable dashboard authentication, or provision this client via `config.json` instead."*
+
+**Consequence:** T4 is **not blocked**. Proceed via `config.json` — which was already the recommended option (declarative, git-tracked, survives PVC loss). Enabling dashboard auth (T6) is still worth doing as **defense in depth** (it also closes the tool-execution auth hole from spike #14), but it is a **hardening item, not a prerequisite**. Severity downgraded 🟡.
+
+### Precedence resolved (old Q-T4-1)
+The `config.json` root has `source_of_truth`: `"split"` (default — merge DB + file) or `"config.json"` (file sections authoritative). Default `split` means adding `mcp.client_configs` merges with, and does not silently drop, the existing `config.db` virtual keys (`ce-key`, `ce-pi-macbook`). Reconciliation is per-section (`isConfigJSONSourceOfTruth()` + `sectionPresent(...)`), so we can let `mcp` be file-owned without disturbing `virtual_keys` in the DB.
+
+### Trap to avoid when writing the VK in `config.json`
+`applyV1Compat` (`lib/config.go:717`) backfills **all** MCP clients into any VK whose `mcp_configs` list is empty — **but only when `version: 1`**. On modern configs (no `version: 1`) an empty list is deny-all (v1.5+ semantics). **Do not set `version: 1`.** Keep the VK's `mcp_configs` explicit.
+
 
 ---
 
@@ -56,51 +62,62 @@ Open WebUI ──► Bifrost (v2.2.3) ──► MCP client "grafana-noc" ──�
 - **Bifrost connects over `streamable-http`** to `http://mcp-grafana.ai.svc.cluster.local:8000/mcp`.
 - **Grafana service-account token lives in Infisical**, injected as an env var; Bifrost config references it (never plaintext).
 
-### Draft MCP client config (Bifrost)
-```json
-{
-  "name": "grafana-noc",
-  "connection_type": "http",
-  "connection_string": "http://mcp-grafana.ai.svc.cluster.local:8000/mcp",
-  "auth_type": "none",
-  "tools_to_execute": ["*"],
-  "tools_to_auto_execute": [],
-  "allow_on_all_virtual_keys": false
-}
-```
-> `tools_to_auto_execute: []` = **R0**: the model can see/read but nothing executes without an explicit `tool/execute` call. `allow_on_all_virtual_keys: false` = deny-by-default, so this server is reachable *only* by keys we explicitly grant.
+### Draft MCP client + VK — the actual `config.json` (git-tracked ConfigMap)
+This is the unblocking artifact. One file, no DB writes, no admin session.
 
-### Draft Virtual Key (`aios-noc`, R0)
 ```json
 {
-  "name": "aios-noc",
-  "mcp_configs": [
-    { "mcp_client_name": "grafana-noc", "tools_to_execute": ["*"] }
+  "mcp": {
+    "client_configs": [
+      {
+        "name": "grafana-noc",
+        "connection_type": "http",
+        "connection_string": "env.GRAFANA_MCP_URL",
+        "is_ping_available": true,
+        "auth_type": "none",
+        "tools_to_execute": ["*"],
+        "tools_to_auto_execute": []
+      }
+    ]
+  },
+  "virtual_keys": [
+    {
+      "name": "aios-noc",
+      "mcp_configs": [
+        { "mcp_client_name": "grafana-noc", "tools_to_execute": ["*"] }
+      ]
+    }
   ]
 }
 ```
-R0 today. Promotion path (per `ai-it-team.md` gates): R1 = no change (already sees everything, executes nothing). R2 = add named action tools to the client's `tools_to_auto_execute`, one tool at a time, after the 2-week R0 track record.
+> - `connection_string` uses **`env.GRAFANA_MCP_URL`** so the URL/secret stays in Infisical, not git.
+> - `tools_to_auto_execute: []` = **R0**: the model can see/read but nothing executes without an explicit `tool/execute` call.
+> - `mcp_configs` is **explicit** and `version` is **omitted** — so deny-by-default applies and no wildcard backfill happens (see the `applyV1Compat` trap in Finding 1).
+> - **Do not set `version: 1`** in this file.
+
+### Promotion path (R1 → R2)
+Per the `ai-it-team.md` gates: R0 (above) → R1 needs no change (already sees everything, executes nothing) → R2 = add **named** action tools to the client's `tools_to_auto_execute`, one tool at a time, after the 2-week R0 track record.
 
 ### The one decision inside T4 — where the config lives
 | Option | Pros | Cons |
 |---|---|---|
-| **A. UI/API (config.db on PVC)** | Matches how Bifrost is run today | **Not declarative; lost on PVC rebuild** (spike caveat); violates the "reproducible from git" rule |
-| **B. `config.json` via git-tracked ConfigMap** (recommended) | Declarative, diffable, survives PVC loss, matches Chad's hard rule; supports `env.VAR_NAME` so secrets stay in Infisical | Must verify precedence vs the existing `config.db` state (the two live VKs `ce-key` / `ce-pi-macbook`) before cutting over |
+| **A. UI/API (config.db on PVC)** | Matches how Bifrost is run today | **Not declarative; lost on PVC rebuild** (spike caveat); **and the private-IP API path is 403'd unless auth is on** |
+| **B. `config.json` via git-tracked ConfigMap** (recommended) | Declarative, diffable, survives PVC loss, matches Chad's hard rule; supports `env.VAR_NAME` so secrets stay in Infisical; **works with dashboard auth off** | Uses `source_of_truth: split` merge semantics — verify existing VKs survive |
 
-**Recommendation: B**, but confirm precedence against the live `config.db` first — turning on `config.json` must not silently drop the existing virtual keys. (Open question Q-T4-1.)
+**Decision: B.** `config.json` is both the declarative choice *and* the one that sidesteps the auth gate. `source_of_truth: split` (default) merges rather than replaces.
 
 ---
 
 ## Ordered execution plan
 | # | Step | Owner | Tier |
 |---|---|---|---|
-| 0 | **Enable Bifrost dashboard auth** (set `BIFROST_SETUP_TOKEN`, create admin; turn on `enforce_auth_on_inference`) | **Chad** | human/R2 |
+| 0 | *(Optional hardening)* Enable Bifrost dashboard auth + `enforce_auth_on_inference` | Chad | human/R2 |
 | 1 | Deploy `mcp-grafana` read-only (`--disable-write`, `-t streamable-http`, `--enabled-tools` incl. `influxdb`) as an in-cluster Deployment/Service | Chad/AI assist | R1→R2 |
 | 2 | Create a **read-only Grafana service account**, token → Infisical; inject as env | Chad | human |
-| 3 | Decide config source (A vs B); if B, write the git-tracked ConfigMap | review | R1 |
-| 4 | Register the `grafana-noc` MCP client in Bifrost | Chad/assist | R1→R2 |
-| 5 | Create the `aios-noc` Virtual Key | Chad/assist | R1→R2 |
-| 6 | **Prove end-to-end** (that's T5): one LogQL query through OWUI/API | — | — |
+| 3 | **Write the git-tracked `config.json`** with `mcp.client_configs` (this is the unblocking step) | review | R1 |
+| 4 | Confirm `source_of_truth` + that existing `config.db` VKs survive the merge | review | R1 |
+| 5 | Add the `aios-noc` Virtual Key (explicit `mcp_configs`; **no** `version: 1`) | review | R1 |
+| 6 | **Prove end-to-end** (that's T5): one LogQL query through OWBUI/API | — | — |
 
 ## Failure modes to write down (NOC agent)
 - Read-only token scoped correctly? (`--disable-write` + a Viewer-scope SA token — belt and braces.)
@@ -110,10 +127,13 @@ R0 today. Promotion path (per `ai-it-team.md` gates): R1 = no change (already se
 - Agent Mode vs Open WebUI streaming (from spike #14) — verify before relying on auto-execute.
 
 ## Open questions
-1. **Q-T4-1:** Bifrost config precedence — does adding a `config.json` supersede/merge with the existing `config.db` virtual keys? Verify before choosing option B.
+1. **Q-T4-1:** *(resolved)* Precedence = `source_of_truth: split` (default) merges DB + file per-section; file `mcp` section can be authoritative without touching DB `virtual_keys`.
 2. **Q-T4-2:** Runtime confirmation — deploy `mcp-grafana` in-cluster (recommended) or alongside the future agent loop on the Studio?
 3. **Q-T4-3:** Scope the Grafana service account: Viewer role sufficient for the Loki+Influx+Grafana read tools we want? Confirm the exact tool list on first successful connect.
 4. **Q-T4-4:** Does `mcp-grafana`'s `influxdb` category query via the Grafana datasource proxy (reusing Grafana's existing Influx token) or need its own InfluxDB creds? Confirm at T5.
 
 ## What was NOT done
 No MCP client, virtual key, service account, or k8s workload was created. All checks were read-only. The one `POST` was an intentionally-rejected probe; verified afterwards that `GET /api/mcp/clients` still returns `count: 0`.
+
+## Correction log
+- **2026-10-04:** Originally reported Finding 1 as a hard blocker ("no MCP client can be registered until dashboard auth is enabled"). **Wrong.** After Chad pushed back, source review showed the guard is API-only + auth-bypassed-only, and `config.json` is a documented, guard-free path. Downgraded to optional hardening. The lesson: I extrapolated from a single 403 to "the capability doesn't exist" without reading the load path.

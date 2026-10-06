@@ -30,9 +30,9 @@ Orchestrator work starts alongside #1 (route NOC questions to the NOC tool).
 - Server credentials come from **Infisical**, never plaintext in Bifrost config (`config.db` on the PVC does not survive PVC recreation — re-apply after rebuild).
 
 ## T4 design result (2026-10-04) — see `t4-noc-mcp-design.md`
-**Blocker found:** Bifrost **403s any MCP client pointing at a private/loopback address unless dashboard auth is enabled** (reproduced live). Every lab service is RFC1918, so **enabling Bifrost dashboard auth is a hard prerequisite** for any MCP client — issue **T6**. It also closes the "no auth gate on tool execution" hole (set `enforce_auth_on_inference` in the same change).
+**No blocker (corrected).** Bifrost supports private/loopback MCP clients with dashboard auth **off** — via **`config.json`**. The `rejectPrivateMCPTargetIfAuthBypassed` guard fires only on the HTTP API *and only when auth is bypassed*; the `config.json` startup path never calls it. Docs: *"…or define the client in `config.json` instead."* So the declarative git-tracked config.json is both the right choice **and** the unblocking one. Enabling dashboard auth (T6) is now **optional hardening**, not a prerequisite.
 **One server covers NOC:** `grafana/mcp-grafana` (official, `--disable-write`, `streamable-http`) = **Loki + Grafana + InfluxDB**. Old "build MCP servers" (H2) becomes "deploy one container."
-**Next:** Chad enables Bifrost auth (T6) → deploy `mcp-grafana` read-only → register `grafana-noc` client + `aios-noc` Virtual Key (R0) → prove one LogQL query (T5).
+**Next:** deploy `mcp-grafana` read-only → write the git-tracked `config.json` (`grafana-noc` client + `aios-noc` VK, explicit `mcp_configs`, **no `version: 1`**) → prove one LogQL query (T5).
 
 ## Helpdesk on M365 (personal tenant `engelmn.com`; Chad creates app registrations)
 - **Mail:** Microsoft Graph via an Entra app registration (one per agent). Needs `Mail.ReadWrite` to move/flag; app-only permissions are tenant-wide by default, so **restrict to a single mailbox** (Exchange Online RBAC for Applications / application access policy — verify current Microsoft guidance). Prefer certificate or short-lived secret stored in Infisical, with expiry + rotation. v1: read + categorize + flag + move (moves are reversible); **no send, no delete**. Treat message content as untrusted data (prompt injection).

@@ -23,8 +23,8 @@ Status key: OPEN · BLOCKED · NEXT · PARKED · DONE?
 | ID | Item | Status |
 |---|---|---|
 | A1 | Decide runtime placement (Compose on Studio vs cluster) | OPEN — confirm. **Scope shrunk by #14:** only the background agent loop needs a home; Bifrost executes tools |
-| A2 | Tool plane: configure Bifrost MCP clients + per-agent Virtual Keys; then prove one read-only tool end-to-end | NEXT (T4/T5). **mcpo is dead — Bifrost IS the gateway** (#14). **T4 BLOCKED by T6** (Bifrost auth) |
-| A6 | Enable Bifrost dashboard auth + `enforce_auth_on_inference` | **HARD PREREQUISITE (T6).** Bifrost 403s MCP clients on private IPs without it. Chad-owned |
+| A2 | Tool plane: configure Bifrost MCP clients + per-agent Virtual Keys; then prove one read-only tool end-to-end | NEXT (T4/T5). **mcpo is dead — Bifrost IS the gateway** (#14). **T4 unblocked — use `config.json`** (private-IP API path 403s without auth; config.json path does not) |
+| A6 | Harden: enable Bifrost dashboard auth + `enforce_auth_on_inference` | **Optional hardening (T6), not a prerequisite.** Closes the tool-execution auth hole. Downgraded from blocker 2026-10-04 |
 | A3 | Orchestrator model bake-off (multi-tool reliability) | OPEN |
 | A4 | HA scope exception + firewall allow | BLOCKED on Chad |
 | A5 | Tenant decision (personal vs work) → Entra app registration design | RESOLVED 2026-10-04: personal `engelmn.com`, M365 Business Premium. Design in ai-it-team.md; creation waits for hires #1–#3 |
