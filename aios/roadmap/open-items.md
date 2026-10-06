@@ -11,11 +11,11 @@ Status key: OPEN · BLOCKED · NEXT · PARKED · DONE?
 | N2 | Pin Bifrost image (tag/digest) instead of `latest`+Always — silent v2.2.3→v2.2.6 drift with behavior change mid-deploy; contradicts repo pinning convention | OPEN (Chad's earlier deliberate choice, needs his yes) |
 | N3 | T5 completion: one read-only tool call through `/mcp/grafana-noc` (initialize + tools/list already proven → 20 tools) | **DONE 2026-10-06** — VK-authed `list_datasources` + `list_loki_label_names` → 200, real data; #31 closed |
 | N6 | `/mcp/*` gateway accepts unauthenticated calls (LAN-only exposure today; bypasses VK scoping) | OPEN — **#33** |
-| N7 | Commit `udm-syslog.json` to git — lives only in cluster CM + script carry-forward; no restore source if lost (same class of loss as mac-system-monitor) | OPEN — fold into N4 commit |
-| N8 | Grafana pods OOMKilled (both, exit 137, 2026-10-03; limit 768Mi) — state is Postgres-backed so restarts are harmless now, but churn = noise; consider raising memory limit | OPEN — optional hardening |
+| N7 | Commit `udm-syslog.json` to git — lives only in cluster CM + script carry-forward; no restore source if lost (same class of loss as mac-system-monitor) | **DONE** — extracted byte-for-byte from live CM, committed `4a8c067` (lab repo) |
+| N8 | Grafana pods OOMKilled (both, exit 137, 2026-10-03; limit 768Mi) — state is Postgres-backed so restarts are harmless now, but churn = noise; raise memory limit (768Mi → 1.5–2Gi, request 512Mi) | OPEN — **#34** |
 
 N1/N2 (setup_token vs dashboard auth; image pinning) consolidated into **#33** (`status:waiting-on-chad`).
-| N4 | Commit ce-ai-home-lab working tree (T4 artifacts + hyphen fix; user's unstaged PVC migration stays out) | BLOCKED on explicit yes |
+| N4 | Commit ce-ai-home-lab working tree | **DONE** (Chad's yes, 2026-10-06): pushed 4 commits to `origin/headlamp-addition` — T4 MCP artifacts `952b21d`, user's PVC migration `5b12b38`, `grafana_noc` rename `576e269`, `udm-syslog.json` tracking `4a8c067`. Branch leads `origin/main` by 8 (Headlamp work + T4); merge to main when he's ready |
 | N5 | Delete orphan `GRAFANA_API_TOKEN` from Infisical (Q-T4-6) | BLOCKED on explicit yes |
 
 ## P0 — Level 2: secrets + Influx (prerequisite for every agent)
