@@ -113,17 +113,58 @@ Per the `ai-it-team.md` gates: R0 (above) → R1 needs no change (already sees e
 |---|---|---|---|
 | 0 | *(Optional hardening)* Enable Bifrost dashboard auth + `enforce_auth_on_inference` | Chad | human/R2 |
 | 1 | Deploy `mcp-grafana` read-only (`--disable-write`, `-t streamable-http`, `--enabled-tools` incl. `influxdb`) as an in-cluster Deployment/Service | Chad/AI assist | R1→R2 |
-| 2 | Create a **read-only Grafana service account**, token → Infisical; inject as env | Chad | human |
+| 2 | Create a **read-only Grafana service account**, generate a **service-account token** → Infisical; inject via `GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE` | Chad | human |
 | 3 | **Write the git-tracked `config.json`** with `mcp.client_configs` (this is the unblocking step) | review | R1 |
 | 4 | Confirm `source_of_truth` + that existing `config.db` VKs survive the merge | review | R1 |
 | 5 | Add the `aios-noc` Virtual Key (explicit `mcp_configs`; **no** `version: 1`) | review | R1 |
 | 6 | **Prove end-to-end** (that's T5): one LogQL query through OWBUI/API | — | — |
 
+## Grafana credential — service-account token (decided 2026-10-04)
+**Use a service-account token, not username/password.** Grafana's own `mcp-grafana` auth doc: *"Use a service account token (**recommended**) or a username and password… basic auth… is less suitable for automation; prefer a service account token when possible."*
+
+Reasons it wins for the NOC agent:
+- **Scope control** — SBAC/RBAC grants exactly the read scopes the NOC tools need. Basic auth inherits a human user's role (likely Admin) → blast radius too large.
+- **Attribution** — a machine identity, not an impersonated person.
+- **Rotation** — revocable independently; no human password in Infisical that also unlocks the Grafana UI.
+- **K8s freshness** — `GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE` is re-read **every request**; the client cache is keyed on the token value, so a rotated Secret produces a new client with **no pod restart**.
+
+### What goes in Infisical
+- **Name:** `GRAFANA_SERVICE_ACCOUNT_TOKEN` — the token generated from a **read-only** Grafana service account (Viewer role, or explicit read scopes for the tools used).
+- **Not:** a Grafana user password. **Not:** the deprecated `GRAFANA_API_KEY` (works, but deprecated).
+- **Not:** the Grafana `admin` password (that's the deferred #4 item — different credential, wrong one to reuse).
+
+### How it's consumed
+Mount the Infisical-synced Secret as a volume and set **only** the file var:
+```yaml
+env:
+  - name: GRAFANA_URL
+    value: http://grafana.monitoring.svc.cluster.local:3000
+  - name: GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE
+    value: /var/run/secrets/grafana/token
+volumeMounts:
+  - name: grafana-token
+    mountPath: /var/run/secrets/grafana
+    readOnly: true
+volumes:
+  - name: grafana-token
+    secret:
+      secretName: grafana-mcp-token
+```
+> If both `GRAFANA_SERVICE_ACCOUNT_TOKEN` and `..._FILE` are set, the **inline value wins** — set only `..._FILE` so rotation works.
+
+### Prerequisite for the service account itself
+Grafana **≥ 9.0** (we're well past). The README also documents the exact pattern we want: *"Using service accounts with limited read-only permissions"* combined with `--disable-write`.
+
+### Caller auth vs Grafana auth (don't confuse them)
+- `GRAFANA_SERVICE_ACCOUNT_TOKEN` = the MCP server authenticating **to Grafana** (outbound). This is what we're setting.
+- `--server-auth-token` / `MCP_GRAFANA_SERVER_TOKEN` = callers authenticating **to the MCP server** (inbound). **We don't need this here** — Bifrost reaches the server over the cluster network. But note: if the server binds a **non-loopback** address with no caller token, it **logs a security error** at startup (a future release will make it fatal). Options: bind loopback and have Bifrost reach it via the pod network, or add `--server-auth-token` and put it in Bifrost's `auth_type: headers`. Choose at deploy time (new Q-T4-5).
+
 ## Failure modes to write down (NOC agent)
-- Read-only token scoped correctly? (`--disable-write` + a Viewer-scope SA token — belt and braces.)
+- Grafana token scoped read-only? (`--disable-write` **plus** a Viewer-scope SA token — belt and braces; tool-level RBAC as a *third* layer).
 - Loki/Influx timeouts on large ranges → cap range/limit in the tool wrapper.
+- Token expiry/rotation breaks the client silently → alert on MCP client health. (File-based mount + per-request re-read mitigates.)
 - MCP client marked reachable by other keys by mistake (`allow_on_all_virtual_keys` must stay `false`).
-- Token expiry/rotation breaks the client silently → alert on MCP client health.
+- Non-loopback bind without `--server-auth-token` → startup security error; decide bind vs caller token (Q-T4-5).
 - Agent Mode vs Open WebUI streaming (from spike #14) — verify before relying on auto-execute.
 
 ## Open questions
@@ -131,6 +172,7 @@ Per the `ai-it-team.md` gates: R0 (above) → R1 needs no change (already sees e
 2. **Q-T4-2:** Runtime confirmation — deploy `mcp-grafana` in-cluster (recommended) or alongside the future agent loop on the Studio?
 3. **Q-T4-3:** Scope the Grafana service account: Viewer role sufficient for the Loki+Influx+Grafana read tools we want? Confirm the exact tool list on first successful connect.
 4. **Q-T4-4:** Does `mcp-grafana`'s `influxdb` category query via the Grafana datasource proxy (reusing Grafana's existing Influx token) or need its own InfluxDB creds? Confirm at T5.
+5. **Q-T4-5:** MCP-server inbound bind: loopback + pod network, or bind non-loopback with `--server-auth-token` stored in Bifrost `auth_type: headers`? (README logs a security error on non-loopback bind without a caller token.)
 
 ## What was NOT done
 No MCP client, virtual key, service account, or k8s workload was created. All checks were read-only. The one `POST` was an intentionally-rejected probe; verified afterwards that `GET /api/mcp/clients` still returns `count: 0`.
