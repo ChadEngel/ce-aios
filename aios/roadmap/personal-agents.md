@@ -5,9 +5,9 @@
 ## Runtime prerequisite (shared with the IT team — build once, not per agent)
 You do **not** need per-agent hardware. You need the **tool/execution plane** that currently doesn't exist:
 - **Have:** Open WebUI (front door), Bifrost (gateway, already has MCP config in `client_config`), Ollama (local models), Infisical/Grafana/Loki/InfluxDB/k3s.
-- **Missing:** a tool layer that lets a model actually call things. `mcpo` is documented but README-only — upstream image `ghcr.io/open-webui/mcpo` is not published, so that path is blocked. **First move: test Bifrost's native MCP support** (already deployed); fallbacks = Open WebUI native tool servers (OpenAPI) or self-built mcpo image.
+- **Missing:** ~~a tool layer~~ — **RESOLVED (spike #14): Bifrost already IS the MCP gateway/agent runtime.** No `mcpo` needed. What remains is *configuration*: MCP client entries + per-agent Virtual Keys (`T4`) and one end-to-end proof (`T5`).
 - **Also missing:** MCP servers per data source (Graph, calendar, Loki/Grafana/Influx, k8s), per-agent Infisical identities (Level 2), and Entra app registrations (Chad creates).
-- **Background agents need a home** — Open WebUI is interactive-only and can't run a "watch the calendar" loop. Runtime = Compose on the Mac Studio (leaning in-cluster next to Bifrost/Infisical for one secret/observability/firewall path). See `open-items.md` A1.
+- **Background agents need a home** — Open WebUI is interactive-only and can't run a "watch the calendar" loop. Runtime = Compose on the Mac Studio (leaning in-cluster next to Bifrost/Infisical for one secret/observability/firewall path). See `open-items.md` A1 / issue T2.
 
 ## Shared prerequisites (identical to the IT team)
 - **Level 2 complete** — placeholders rotated, secrets in Infisical, per-agent identities. Every personal agent is gated on this, same as every IT hire.

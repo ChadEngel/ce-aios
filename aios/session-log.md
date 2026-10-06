@@ -1,11 +1,13 @@
 # Session log
 
 ## 2026-10-04 (session 3)
-- Stood up **GitHub Issues as the work queue** on `ChadEngel/ce-aios`: 29 issues (#1–#29), label taxonomy (area/prio/tier/status/type), 6 milestones.
+- Ran spike **#14 (T1)**: **PASS — Bifrost v2.2.3 is a full MCP gateway + agent runtime.** `mcpo` is dead (removed from plan). R0/R1/R2 tiers map natively to `tools_to_execute` vs `tools_to_auto_execute` + per-agent Virtual Keys. Write-up: `roadmap/bifrost-mcp-spike.md`. Filed T4 (MCP client/VK config) + T5 (one-tool proof).
+- Flagged hardening: `enforce_auth_on_inference` is **OFF**; Agent Mode has no streaming; prefer HTTP/SSE MCP servers.
+- Stood up **GitHub Issues as the work queue** on `ChadEngel/ce-aios`: 31 issues, label taxonomy (area/prio/tier/status/type), 6 milestones.
 - Added `roadmap/manager-agent.md`; decided manager **Phase 0 = in-session `gh` protocol** (no runtime needed), Phase 1 blocked on the tool plane.
 - Answered "do I need something to run these agents?": yes — the **tool/execution plane** is missing (mcpo blocked on unpublished image; test Bifrost native MCP first). Logged T1–T3.
 - InfluxDB migration corrected to **DEFERRED / not a blocker** (earlier DONE note was wrong).
-- **Where we left off:** backlog live; recommended next action = T1 (Bifrost MCP spike). T2 needs Chad's runtime-placement decision. Grafana password deferred to end (not tracked, not a blocker — #4 closed).
+- **Where we left off:** #14 spike passed (Bifrost IS the tool plane). Next actions = **T4** (define Bifrost MCP clients + `aios-noc` Virtual Key) and T5 (one read-only tool end-to-end). T2 runtime-placement decision still open. Grafana password deferred to end (#4 closed).
 
 ## 2026-10-04 (session 2)
 - Re-scanned ce-ai-lab: Influx migration still not cut over; four placeholder credentials still live; Tailscale HA, UniFi DR, syslog receiver shipped. Updated context.md.

@@ -1,5 +1,8 @@
 # Decision log (AIOS) — newest first. Why we chose X, so nobody re-litigates it.
 
+## 2026-10-04 — Spike #14: Bifrost IS the tool plane; drop `mcpo`
+Bifrost v2.2.3 (live at `llm.caehomelab.com`) is a full **MCP gateway + agent runtime**: MCP client (STDIO/HTTP/SSE), gateway mode, Agent Mode (auto-execute), per-Virtual-Key tool allow-lists (deny-by-default), Virtual MCPs, Code Mode. The `mcpo`/unpublished-image blocker was a red herring — **remove `mcpo` from the plan.** The R0/R1/R2 tiers map natively to `tools_to_execute` vs `tools_to_auto_execute` + one Virtual Key per agent. Remaining tool-plane work is *configuration* (T4/T5), not a new component. Caveats: Agent Mode has no streaming; `enforce_auth_on_inference` is currently **OFF** (harden before write tools); server creds from Infisical only; prefer HTTP/SSE servers (STDIO needs deps in the container). Full write-up: `roadmap/bifrost-mcp-spike.md`.
+
 ## 2026-10-04 — Grafana password rotation is end-of-project, not a blocker
 Chad: Grafana `admin`/`admin` is not a blocker for any of this work and should not be tracked on the critical path — it gets done at the very end. Issue #4 closed (labeled `prio:parked`). The secrets critical path is the **Infisical-internal** items (AUTH_SECRET, Postgres password, ENCRYPTION_KEY) + the Cloudflare token, not Grafana.
 

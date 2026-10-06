@@ -6,6 +6,8 @@
 - **Front door:** Open WebUI (ai.caehomelab.com) for all devices via LAN/Tailscale; later Teams (and push via Pushover) for chat/alerts.
 - **Orchestrator ("IT manager"):** one model behind Bifrost that routes to specialists. This role needs reliable multi-step tool calling — test local models against a fixed multi-tool task set before trusting one; fall back to a frontier model via Bifrost for this role only if needed. Specialists can use local models via Ollama.
 - **Tools:** MCP servers, bridged to Open WebUI with `mcpo` (already scoped in ce-ai-lab, README only — not built).
+  - **UPDATE 2026-10-04 (spike #14): `mcpo` is dead.** Bifrost (`llm.caehomelab.com`, v2.2.3) is itself a **full MCP gateway + agent runtime** — MCP client (STDIO/HTTP/SSE), gateway mode, Agent Mode, per-Virtual-Key tool allow-lists, Virtual MCPs, Code Mode. The tool plane is *configuration of Bifrost*, not a new component. See `bifrost-mcp-spike.md`.
+  - **Tier model is native:** `tools_to_execute` (what the model may see) vs `tools_to_auto_execute` (what runs without approval) + one Virtual Key per agent = R0/R1/R2 + per-agent least privilege, inside Bifrost. Second scoping layer alongside each agent's Infisical identity.
 - **Runtime placement (leaning):** agent/MCP runtime as Docker Compose on the Mac Studio (Chad's own Feb design; no k3s, no VM), Ollama stays native; ingress through existing cluster Traefik so TLS/URLs don't change. Secrets injected at start from Infisical (`infs`/CLI), never baked into compose files. UNDECIDED — confirm with Chad.
 - **Observability of the agents themselves:** tool calls → Loki; token/latency → InfluxDB/Grafana.
 
@@ -19,6 +21,13 @@
 | 4 | Helpdesk / ops coordinator | Email triage (move to folders, flag/highlight important) and Teams/text interface | Microsoft Graph (M365), Teams, Pushover | R1→R2 | Entra app registration(s) — see below | UNBLOCKED (tenant confirmed); waits for hires #1–#3 |
 | 5 | Network tech | Segmentation plan execution support, firewall-rule review, UDM config diffing | UDM read-only API key, home-network-config repo | R0→R1 | UDM_API_KEY read-only; never SSH/root | later |
 Orchestrator work starts alongside #1 (route NOC questions to the NOC tool).
+
+## Tool plane status (updated 2026-10-04 after spike #14)
+**Bifrost IS the tool plane.** No `mcpo`, no new gateway. Remaining work is configuration:
+- `T4` define MCP client entries (prefer HTTP/SSE) + one Virtual Key per agent.
+- `T5` prove one read-only tool end-to-end before building more.
+- **Hardening before any write tool:** `enforce_auth_on_inference` is currently **OFF**, and Agent Mode does not support streaming (Open WebUI streams by default).
+- Server credentials come from **Infisical**, never plaintext in Bifrost config (`config.db` on the PVC does not survive PVC recreation — re-apply after rebuild).
 
 ## Helpdesk on M365 (personal tenant `engelmn.com`; Chad creates app registrations)
 - **Mail:** Microsoft Graph via an Entra app registration (one per agent). Needs `Mail.ReadWrite` to move/flag; app-only permissions are tenant-wide by default, so **restrict to a single mailbox** (Exchange Online RBAC for Applications / application access policy — verify current Microsoft guidance). Prefer certificate or short-lived secret stored in Infisical, with expiry + rotation. v1: read + categorize + flag + move (moves are reversible); **no send, no delete**. Treat message content as untrusted data (prompt injection).

@@ -16,6 +16,7 @@ Plain markdown. Load into a Claude Project, or an Open WebUI system prompt / Kno
    - `ai-it-team.md` — roles, build order, permission tiers, per-agent access
    - `personal-agents.md` — non-IT agents (scheduler, travel, financial); same platform/guardrails
    - `manager-agent.md` — the work-management agent + protocol (state = GitHub Issues)
+   - `bifrost-mcp-spike.md` — result of T1: Bifrost is a native MCP gateway (mcpo dropped)
    - `open-items.md` — prioritized tracker (secrets, Influx, network, docs, parked ideas) + pending questions
 
 **Live backlog:** the actionable queue now lives in **GitHub Issues** on `ChadEngel/ce-aios` (labels `area:*`/`prio:*`/`tier:*`/`status:*`/`type:*`; milestones per workstream). `open-items.md` is the human-readable summary; issues are the source of truth for status.

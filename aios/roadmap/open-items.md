@@ -22,8 +22,8 @@ Status key: OPEN · BLOCKED · NEXT · PARKED · DONE?
 ## P1 — AI IT team
 | ID | Item | Status |
 |---|---|---|
-| A1 | Decide runtime placement (Compose on Studio vs cluster) | OPEN — confirm |
-| A2 | Build `mcpo` + Grafana/Loki/Influx MCP; NOC agent R0 | NEXT after S1 |
+| A1 | Decide runtime placement (Compose on Studio vs cluster) | OPEN — confirm. **Scope shrunk by #14:** only the background agent loop needs a home; Bifrost executes tools |
+| A2 | Tool plane: configure Bifrost MCP clients + per-agent Virtual Keys; then prove one read-only tool end-to-end | NEXT (T4/T5). **mcpo is dead — Bifrost IS the gateway** (#14) |
 | A3 | Orchestrator model bake-off (multi-tool reliability) | OPEN |
 | A4 | HA scope exception + firewall allow | BLOCKED on Chad |
 | A5 | Tenant decision (personal vs work) → Entra app registration design | RESOLVED 2026-10-04: personal `engelmn.com`, M365 Business Premium. Design in ai-it-team.md; creation waits for hires #1–#3 |
