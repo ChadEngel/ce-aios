@@ -7,7 +7,7 @@ Status key: OPEN · BLOCKED · NEXT · PARKED · DONE?
 ## NEW — T4/T5 execution findings (2026-10-06, session 5; details in `t4-t5-execution-state.md`)
 | ID | Item | Status |
 |---|---|---|
-| N1 | `/api` locked by upstream Bifrost v2.2.6 "setup lock" (pulled via `latest`+Always mid-deploy). Decisions: A = `setup_token` from Infisical (recommended), B = enable dashboard auth (== T6) | **BLOCKED on Chad** |
+| N1 | `/api` locked by upstream Bifrost v2.2.6 setup lock | **RESOLVED (A)** — `BIFROST_SETUP_TOKEN` env from Infisical → `bifrost-secrets` → pod env; verified 401-without/200-with-header (+403 wrong token); #33 comment. B (dashboard auth) = T6/#32 remains |
 | N2 | Pin Bifrost image (tag/digest) instead of `latest`+Always — silent v2.2.3→v2.2.6 drift with behavior change mid-deploy; contradicts repo pinning convention | OPEN (Chad's earlier deliberate choice, needs his yes) |
 | N3 | T5 completion: one read-only tool call through `/mcp/grafana-noc` (initialize + tools/list already proven → 20 tools) | **DONE 2026-10-06** — VK-authed `list_datasources` + `list_loki_label_names` → 200, real data; #31 closed |
 | N6 | `/mcp/*` gateway accepts unauthenticated calls (LAN-only exposure today; bypasses VK scoping) | OPEN — **#33** |
