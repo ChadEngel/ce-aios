@@ -1,7 +1,8 @@
 # T4/T5 — deploy + prove runbook (review then go)
 
-**Status:** staged, **not executed**. Everything below is validated with
-`kubectl apply --dry-run=server`. T4 = #30, T5 = #31.
+**Status:** Steps 1–2 **EXECUTED 2026-10-06** (session 5) — live state, bugs found,
+and remaining work are tracked in `t4-t5-execution-state.md` (read that first).
+Validation record below kept for the rollback/verify steps. T4 = #30, T5 = #31.
 
 ---
 

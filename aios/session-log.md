@@ -1,5 +1,13 @@
 # Session log
 
+## 2026-10-06 (session 5)
+- **Chad said "go" → executed T4/T5 Step 1–2 live.** Infisical sync, mcp-grafana deploy, Bifrost ConfigMap + restart all applied. Full state handoff: `roadmap/t4-t5-execution-state.md` (authoritative).
+- **Bug 1 (mine, fixed): MCP client names forbid hyphens** — `grafana-noc` rejected at startup, so the VK's `mcp_configs` also failed to resolve. Renamed to `grafana_noc` everywhere; re-applied → registered, 20 tools discovered. VK names still allow hyphens.
+- **Bug 2 (upstream, open): Bifrost `latest`+Always pulled v2.2.6 (released that day) which adds an OSS `/api` setup lock** — all management routes 403 while dashboard auth is off and no `setup_token` exists. Inference + `/mcp/*` unaffected. Options A (setup_token from Infisical) vs B (enable dashboard auth = T6). Awaiting Chad.
+- **Merge safety proven at the DB layer:** `ce-key` + `ce-pi-macbook` VKs unchanged, `aios-noc` auto-generated. Verified via sqlite on a copied config.db (`/api` was locked).
+- **T5 half-proven:** `/mcp/grafana-noc` initialize → 200; `tools/list` → 20 read-only-tiered tools. Actual tool **call** still pending.
+- **Next:** T5 tool call → close #31/#30; Chad decides setup_token + image pinning (latest+Always caused silent v2.2.3→v2.2.6 drift); then Chad's unrelated Grafana task.
+
 ## 2026-10-06 (session 4)
 - **T4 (#30) R1 artifacts written** to `ce-ai-home-lab` (nothing applied): `applications/mcp-grafana/` (Deployment+Service+NetworkPolicy, pinned `grafana/mcp-grafana:2.0.1`), `bifrost-config` ConfigMap + `subPath` mount at `/app/data/config.json`, and `mcp-grafana-secrets-sync` in `infisical-secrets-sync.yaml`. All pass `kubectl apply --dry-run=client`.
 - **Grafana service-account token verified live**: `sa-1-ai-token` (`service-account:2`, not admin) — Loki labels via datasource proxy → 200; `POST /api/folders` → 403 (read-only confirmed).

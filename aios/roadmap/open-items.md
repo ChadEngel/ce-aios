@@ -1,8 +1,17 @@
-# Open items (priority order) — refreshed 2026-10-04
+# Open items (priority order) — refreshed 2026-10-06
 
 > **Live queue moved to GitHub Issues** (`ChadEngel/ce-aios`) — see `manager-agent.md`. The tables below are the human-readable mirror; if they disagree with the issue tracker, **the issues win**.
 
 Status key: OPEN · BLOCKED · NEXT · PARKED · DONE?
+
+## NEW — T4/T5 execution findings (2026-10-06, session 5; details in `t4-t5-execution-state.md`)
+| ID | Item | Status |
+|---|---|---|
+| N1 | `/api` locked by upstream Bifrost v2.2.6 "setup lock" (pulled via `latest`+Always mid-deploy). Decisions: A = `setup_token` from Infisical (recommended), B = enable dashboard auth (== T6) | **BLOCKED on Chad** |
+| N2 | Pin Bifrost image (tag/digest) instead of `latest`+Always — silent v2.2.3→v2.2.6 drift with behavior change mid-deploy; contradicts repo pinning convention | OPEN (Chad's earlier deliberate choice, needs his yes) |
+| N3 | T5 completion: one read-only tool call through `/mcp/grafana-noc` (initialize + tools/list already proven → 20 tools) | OPEN — next action |
+| N4 | Commit ce-ai-home-lab working tree (T4 artifacts + hyphen fix; user's unstaged PVC migration stays out) | BLOCKED on explicit yes |
+| N5 | Delete orphan `GRAFANA_API_TOKEN` from Infisical (Q-T4-6) | BLOCKED on explicit yes |
 
 ## P0 — Level 2: secrets + Influx (prerequisite for every agent)
 | ID | Item | Status | Notes |

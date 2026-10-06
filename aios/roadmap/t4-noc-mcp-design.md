@@ -5,9 +5,16 @@
 
 ---
 
-## Finding 3 — R1 artifacts written (2026-10-06); two wiring traps found in source
+## Finding 3 — APPLIED + LIVE (2026-10-06); two wiring traps found in source
 
-**Status:** R1 files exist in `ce-ai-home-lab`; **nothing applied.** The Grafana
+**Status (updated session 5): applied to the live cluster; merge-safety and
+registration verified. T5 (one tool call) still pending — see
+`t4-t5-execution-state.md`. Two execution findings: MCP client names forbid
+hyphens (`grafana-noc` → `grafana_noc`, fixed everywhere), and upstream
+Bifrost v2.2.6 (released 2026-10-06, pulled via `latest`+Always) now locks
+`/api` when dashboard auth is off and no `setup_token` exists — management
+routes 403; inference and `/mcp/*` unaffected (decision pending, see N1/N2 in
+`open-items.md`).** The Grafana
 service-account token is in Infisical and was **verified live**: `sa-1-ai-token`
 (`service-account:2`, not a Grafana admin), Loki `GET /api/datasources/proxy/uid/loki/loki/api/v1/labels` → **200**,
 `POST /api/folders` → **403**. Read-only confirmed.
