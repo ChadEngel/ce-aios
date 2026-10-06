@@ -5,6 +5,39 @@
 
 ---
 
+## Finding 3 — R1 artifacts written (2026-10-06); two wiring traps found in source
+
+**Status:** R1 files exist in `ce-ai-home-lab`; **nothing applied.** The Grafana
+service-account token is in Infisical and was **verified live**: `sa-1-ai-token`
+(`service-account:2`, not a Grafana admin), Loki `GET /api/datasources/proxy/uid/loki/loki/api/v1/labels` → **200**,
+`POST /api/folders` → **403**. Read-only confirmed.
+
+Files (all in `~/dev/ce-ai-home-lab`):
+- `clusters/util-server/applications/mcp-grafana/kustomization.yaml` — Deployment + Service + NetworkPolicy
+- `clusters/util-server/applications/mcp-grafana/README.md`
+- `clusters/util-server/applications/bifrost/kustomization.yaml` — new `bifrost-config` ConfigMap (`config.json`) + `subPath` mount at `/app/data/config.json`
+- `clusters/util-server/applications/infisical-operator/infisical-secrets-sync.yaml` — new `mcp-grafana-secrets-sync`
+
+### Image tag trap
+Docker Hub tags **omit the `v`**: GitHub `v2.0.1` = image **`2.0.1`**. `v2.0.1` returns `MANIFEST_UNKNOWN`. Pinned `grafana/mcp-grafana:2.0.1` (multi-arch amd64+arm64, verified). All flags used (`--enable-query`, `--allowed-hosts`, `--endpoint-path`, `--enabled-tools`) confirmed present in that tag, not just `main`.
+
+### Trap A — the Bearer prefix cannot come from one secret (Q-T4-5)
+Bifrost's `sharedHeadersResolver.ConnectionHeaders` (`core/mcp/credstore/shared_headers.go`) sets the header value **verbatim** — **no automatic `Bearer ` prefix**. And `env.` refs resolve **only when the whole value is `env.X`**; there is no `${}` interpolation (`SecretVar.GetValue()` returns the raw field; `NewSecretVar` does a single `os.LookupEnv`). So `"Authorization": "Bearer env.X"` yields the literal string `Bearer env.X`.
+
+mcp-grafana, meanwhile, **requires** the `Bearer ` scheme: `bearerTokenFromRequest` (`caller_auth.go`) rejects anything not beginning `bearer ` (case-insensitive), then constant-time-compares. It **strips** the header before forwarding, so the caller token never reaches Grafana.
+
+**Consequence:** enabling caller auth needs **two** derived values from one source — the raw token for mcp-grafana's `MCP_GRAFANA_SERVER_TOKEN`, and `Bearer <token>` for Bifrost's header. That is why the current manifests **run with caller auth off** and compensate with a NetworkPolicy.
+
+### Trap B — Host validation blocks both Bifrost and the probes
+`--allowed-hosts` defaults to loopback variants of `--address`, and validation runs on **every** route on the MCP listener (`/mcp` *and* `/healthz`). Bound to a pod IP:
+- Bifrost's request carries `Host: mcp-grafana.ai.svc.cluster.local:8000` → not in default list → **403**. Fixed with an explicit `--allowed-hosts`.
+- A k8s `httpGet` probe sends `Host: <podIP>` → also rejected. Fixed by using **`tcpSocket`** probes.
+
+### Decision recorded — Q-T4-2 (placement)
+`mcp-grafana` runs as its **own in-cluster Deployment** (no Ingress), same namespace as Grafana. Not stdio-in-Bifrost: Bifrost's `MCPStdioConfig{command,args}` exec()s a **local** binary, and that binary is not in the Bifrost image. HTTP + config.json is the clean path.
+
+---
+
 ## Finding 1 (CORRECTED) — private-network MCP clients ARE supported; my earlier "blocker" was wrong
 
 **Correction (2026-10-04, after Chad pushed back and I read the source).** I initially called this a hard blocker. It is not. Bifrost explicitly supports private/loopback MCP targets with dashboard auth disabled — via **`config.json`**.
@@ -172,10 +205,15 @@ Grafana **≥ 9.0** (we're well past). The README also documents the exact patte
 2. **Q-T4-2:** Runtime confirmation — deploy `mcp-grafana` in-cluster (recommended) or alongside the future agent loop on the Studio?
 3. **Q-T4-3:** Scope the Grafana service account: Viewer role sufficient for the Loki+Influx+Grafana read tools we want? Confirm the exact tool list on first successful connect.
 4. **Q-T4-4:** Does `mcp-grafana`'s `influxdb` category query via the Grafana datasource proxy (reusing Grafana's existing Influx token) or need its own InfluxDB creds? Confirm at T5.
-5. **Q-T4-5:** MCP-server inbound bind: loopback + pod network, or bind non-loopback with `--server-auth-token` stored in Bifrost `auth_type: headers`? (README logs a security error on non-loopback bind without a caller token.)
+5. **Q-T4-5:** *(open — Trap A above)* MCP-server inbound bind: currently **caller auth off + NetworkPolicy** (only Bifrost pod admitted). Upstream logs a SECURITY error on non-loopback bind without a caller token (fatal in a future release). The blessed fix needs **two** secret values (raw token + `Bearer <token>`) because Bifrost sends header values verbatim. Follow-up hardening.
+6. **Q-T4-6:** *(new)* The Infisical key `GRAFANA_API_TOKEN` (July) is unused by any manifest and is **not** canonical. Remove it to avoid a wrong-token mistake later.
+7. **Q-T4-7:** *(new)* `config.json` is mounted via `subPath`, which does **not** hot-reload. A ConfigMap edit requires `kubectl rollout restart deploy/bifrost` — which Bifrost needs anyway to re-read config.
 
 ## What was NOT done
-No MCP client, virtual key, service account, or k8s workload was created. All checks were read-only. The one `POST` was an intentionally-rejected probe; verified afterwards that `GET /api/mcp/clients` still returns `count: 0`.
+Versions 1–2 of this doc: no MCP client, virtual key, service account, or k8s workload was created; all checks were read-only.
+
+Version 3 (2026-10-06): **R1 artifacts written to `ce-ai-home-lab`** — `mcp-grafana/` manifests, the `bifrost-config` ConfigMap, and the InfisicalSecret — validated with `kubectl apply --dry-run=client`. **Still nothing applied to the cluster.** The Grafana token remains in Infisical; no secret value was written to git.
 
 ## Correction log
-- **2026-10-04:** Originally reported Finding 1 as a hard blocker ("no MCP client can be registered until dashboard auth is enabled"). **Wrong.** After Chad pushed back, source review showed the guard is API-only + auth-bypassed-only, and `config.json` is a documented, guard-free path. Downgraded to optional hardening. The lesson: I extrapolated from a single 403 to "the capability doesn't exist" without reading the load path.
+- **2026-10-06:** Chad asserted "HTTP/SSE is unsupported on the config path" and "mcp-grafana cannot do stdio." **Both false.** (1) The private-network guard lives only in the management-API handler (`handlers/mcp.go:1677`); `lib/config.go` never calls it — grep for `IsPublicIP` in the whole tree returns one hit, in `mcp.go`. (2) mcp-grafana's default transport **is** stdio (`-t` defaults to `"stdio"`, with a full `case "stdio"`). The real stdio objection is that Bifrost exec()s a *local* binary not present in its image. Folded into Finding 3.
+- **2026-10-04:** Originally reported Finding 1 as a hard blocker ("no MCP client can be registered until dashboard auth is enabled"). **Wrong.** After Chad pushed back, source review showed the guard is API-only + auth-bypassed-only, and `config.json` is a documented, guard-free path. Downgraded to optional hardening. Lesson: I extrapolated from a single 403 to "the capability doesn't exist" without reading the load path.

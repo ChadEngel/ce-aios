@@ -1,5 +1,15 @@
 # Session log
 
+## 2026-10-06 (session 4)
+- **T4 (#30) R1 artifacts written** to `ce-ai-home-lab` (nothing applied): `applications/mcp-grafana/` (Deployment+Service+NetworkPolicy, pinned `grafana/mcp-grafana:2.0.1`), `bifrost-config` ConfigMap + `subPath` mount at `/app/data/config.json`, and `mcp-grafana-secrets-sync` in `infisical-secrets-sync.yaml`. All pass `kubectl apply --dry-run=client`.
+- **Grafana service-account token verified live**: `sa-1-ai-token` (`service-account:2`, not admin) — Loki labels via datasource proxy → 200; `POST /api/folders` → 403 (read-only confirmed).
+- **Two traps found in Bifrost/mcp-grafana source** (both would have caused silent failure):
+  1. Bifrost sends header values **verbatim** (no auto-`Bearer`) and resolves `env.X` only when the whole value is `env.X` (no `${}` interpolation); mcp-grafana **requires** `Bearer `. → caller auth needs **two** derived secret values. Ran with caller auth off + NetworkPolicy instead.
+  2. mcp-grafana `--allowed-hosts` defaults to loopback and validates **every** route: Bifrost's Service-DNS Host and k8s `httpGet` probe Host (pod IP) both 403. Fixed with explicit `--allowed-hosts` + `tcpSocket` probes.
+- **Correction (assistant was wrong):** asserted HTTP/SSE is unsupported on the config.json path — false (guard is management-API-only; `IsPublicIP` appears once in the tree, in `handlers/mcp.go`). Also asserted mcp-grafana can't do stdio — false (stdio is its default). Chose HTTP anyway because Bifrost's stdio client exec()s a *local* binary not in its image. Lesson repeated: read the load path before declaring unsupported.
+- Pinned image tags on Docker Hub **omit the `v`** (GitHub `v2.0.1` = image `2.0.1`).
+- **Where we left off:** artifacts are R1/files-only. Next: Chad applies `mcp-grafana` + restarts Bifrost → **#31 (T5)** one-LogQL end-to-end proof. Follow-ups: Q-T4-5 caller auth (`MCP_GRAFANA_SERVER_TOKEN`), Q-T4-6 remove orphan `GRAFANA_API_TOKEN` from Infisical.
+
 ## 2026-10-04 (session 3)
 - Ran spike **#14 (T1)**: **PASS — Bifrost v2.2.3 is a full MCP gateway + agent runtime.** `mcpo` is dead (removed from plan). R0/R1/R2 tiers map natively to `tools_to_execute` vs `tools_to_auto_execute` + per-agent Virtual Keys. Write-up: `roadmap/bifrost-mcp-spike.md`. Filed T4 (MCP client/VK config) + T5 (one-tool proof).
 - Ran **T4 (#30)** design: **no blocker (corrected)** — Bifrost supports private/loopback MCP clients with auth off via **`config.json`** (the API guard only fires on the auth-bypassed HTTP path). Deploy **`grafana/mcp-grafana`** read-only (covers Loki+Grafana+Influx in one container); register via git-tracked config.json with `aios-noc` VK (explicit `mcp_configs`, no `version: 1`). Enabling dashboard auth = optional hardening (T6), downgraded. Design: `roadmap/t4-noc-mcp-design.md`.
