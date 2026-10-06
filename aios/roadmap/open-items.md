@@ -11,6 +11,8 @@ Status key: OPEN · BLOCKED · NEXT · PARKED · DONE?
 | N2 | Pin Bifrost image (tag/digest) instead of `latest`+Always — silent v2.2.3→v2.2.6 drift with behavior change mid-deploy; contradicts repo pinning convention | OPEN (Chad's earlier deliberate choice, needs his yes) |
 | N3 | T5 completion: one read-only tool call through `/mcp/grafana-noc` (initialize + tools/list already proven → 20 tools) | **DONE 2026-10-06** — VK-authed `list_datasources` + `list_loki_label_names` → 200, real data; #31 closed |
 | N6 | `/mcp/*` gateway accepts unauthenticated calls (LAN-only exposure today; bypasses VK scoping) | OPEN — **#33** |
+| N7 | Commit `udm-syslog.json` to git — lives only in cluster CM + script carry-forward; no restore source if lost (same class of loss as mac-system-monitor) | OPEN — fold into N4 commit |
+| N8 | Grafana pods OOMKilled (both, exit 137, 2026-10-03; limit 768Mi) — state is Postgres-backed so restarts are harmless now, but churn = noise; consider raising memory limit | OPEN — optional hardening |
 
 N1/N2 (setup_token vs dashboard auth; image pinning) consolidated into **#33** (`status:waiting-on-chad`).
 | N4 | Commit ce-ai-home-lab working tree (T4 artifacts + hyphen fix; user's unstaged PVC migration stays out) | BLOCKED on explicit yes |

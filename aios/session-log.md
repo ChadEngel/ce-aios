@@ -1,5 +1,11 @@
 # Session log
 
+## 2026-10-06 (session 6) — Grafana: Mac System Monitor keeps disappearing
+- **Restored + root-caused.** `mac-system-monitor` (18 panels) was absent from live Grafana. Forensics in the Postgres unified-storage history (`resource_history`, table `dashboards/…` — Grafana 13 no longer uses the legacy `dashboard` table, which is why it reads 0): created 2026-09-19 04:37 (the `5174a68` restore), **deleted 2026-09-27 14:08 = exactly the grafana 2-replica HA cutover**, never re-added after that (10/03 OOMKills didn't matter — state is Postgres-backed).
+- **Mechanism:** dashboards are file-provisioned from ConfigMap `grafana-dashboards-json` → mounted at `/var/lib/grafana/dashboards/default`; provider `updateIntervalSeconds: 30` **deletes any provisioned dashboard whose file disappears from the mount**. The 9/27 cutover rebuilt that ConfigMap from a stale checkout that predates `5174a68` (which added `mac-system-monitor.json`) — file gone → dashboard deleted. Recurs every time the CM is rebuilt without the key.
+- **Fix applied:** ran current additive `deploy-grafana.sh` → CM now has 7 repo dashboards + preserved `udm-syslog.json` orphan (script warns: commit to git). Verified: API serves 8 dashboards, unified storage has `dashboards/mac-system-monitor`, no pod churn.
+- **Why it stays put:** JSON is git-tracked on origin/main; script default is additive/orphan-preserving (deletes only with `--prune`). Residual risks: rebuilding the CM by hand or from a stale checkout, and `udm-syslog.json` existing only in the cluster + script's carry-forward. Flagged optional: both grafana pods OOMKilled 10/03 (exit 137; limit 768Mi) — harmless to state now, but churn.
+
 ## 2026-10-06 (session 5)
 - **Chad said "go" → executed T4/T5 Step 1–2 live.** Infisical sync, mcp-grafana deploy, Bifrost ConfigMap + restart all applied. Full state handoff: `roadmap/t4-t5-execution-state.md` (authoritative).
 - **Bug 1 (mine, fixed): MCP client names forbid hyphens** — `grafana-noc` rejected at startup, so the VK's `mcp_configs` also failed to resolve. Renamed to `grafana_noc` everywhere; re-applied → registered, 20 tools discovered. VK names still allow hyphens.
