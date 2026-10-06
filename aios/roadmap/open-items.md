@@ -1,0 +1,44 @@
+# Open items (priority order) — refreshed 2026-10-04
+
+Status key: OPEN · BLOCKED · NEXT · PARKED · DONE?
+
+## P0 — Level 2: secrets + Influx (prerequisite for every agent)
+| ID | Item | Status | Notes |
+|---|---|---|---|
+| S1 | Rotate Grafana admin password (`admin`/`admin` is LIVE) | NEXT | runbook: ce-ai-lab `docs/rotate-placeholder-credentials.md`; then move to an InfisicalSecret sync |
+| S2 | Rotate Infisical AUTH_SECRET | OPEN | logs everyone out |
+| S3 | Rotate Infisical Postgres password (update POSTGRES_PASSWORD **and** DB_CONNECTION_URI) | OPEN | brief downtime |
+| S4 | Rotate Infisical ENCRYPTION_KEY | OPEN | **destructive**: export all secrets first, verify backup, human-executed |
+| S5 | Rotate Cloudflare API token at Cloudflare + Infisical | OPEN | leaked in old git history |
+| S6 | Confirm rotation of HA Infisical client secret, HA long-lived token, HA SSH deploy key | UNCONFIRMED | INSTRUCTIONS.md says exposed in chat |
+| S7 | Redact + scrub `psk` and `x_iapp_key` in home-network-config `udm-pro/exports/*` (git history too); add sanitize script + pre-commit hook; rotate WiFi PSK if it was the exposed value | OPEN | repo is private but rule is zero secrets |
+| S8 | Revoke bootstrap Infisical service token once CLI admin no longer needed | OPEN | optional |
+| S9 | Delete old `influx-metrics-pusher` Job (plaintext write token in spec) and rotate INFLUXDB_TOKEN after cutover | OPEN | |
+| S10 | Canonicalize Infisical project names across docs | OPEN | |
+| I1 | InfluxDB migration aiserver→cluster (backup/restore needs an All-Access token from aiserver UI; consider `local-path` vs NFS for TSDB) | OPEN | status doc untouched since 07-27; manifests exist, not cut over |
+
+## P1 — AI IT team
+| ID | Item | Status |
+|---|---|---|
+| A1 | Decide runtime placement (Compose on Studio vs cluster) | OPEN — confirm |
+| A2 | Build `mcpo` + Grafana/Loki/Influx MCP; NOC agent R0 | NEXT after S1 |
+| A3 | Orchestrator model bake-off (multi-tool reliability) | OPEN |
+| A4 | HA scope exception + firewall allow | BLOCKED on Chad |
+| A5 | Tenant decision (personal vs work) → Entra app registration design | RESOLVED 2026-10-04: personal `engelmn.com`, M365 Business Premium. Design in ai-it-team.md; creation waits for hires #1–#3 |
+
+## P2 — network (home-network-config)
+Segmentation plan phases 0–6 not started; firewall is allow-all. Pending decisions: HA placement, Sonos VLAN, Droplet-7B40 → VLAN 30, printer, Netgear walkthrough, NAS eth0 → VLAN 50, rename VLAN 40/50, retire VLAN 2/DVR. Planned rules must carve out Lab→HA, Lab→UDM API for the agents/unpoller/udm-thermal.
+
+## P2 — documentation drift
+UDM_REPLACEMENT.md missing · duplicate syslog-receiver · DEPLOYMENT_STATUS stale header + services table lacks postgres/redis/pushover-bridge/synthetic-monitor/udm-thermal/influxdb · stale LiteLLM leftovers to delete · broken openwebui production overlay · SETUP.md TODOs (Ollama/AIbeast install doc, util-server VM doc) · reconcile `aiserver.home`/AIbeast naming · stale `.60` in firewall group.
+
+## PARKED (do not start without Chad re-prioritizing)
+Lauren AI-literacy workspace (build for one kid first; not a business yet) · West Maui cruise business (planning only) · Level 3 formal "Project" (this folder is the portable equivalent).
+
+## Pending questions for Chad
+1. Approve HA scope exception (192.168.250.168:8123/:8300, read-only first)? 
+2. ~~Which M365 tenant~~ ANSWERED: personal `engelmn.com` (M365 Business Premium + Teams).
+3. Were the HA token / deploy key / Infisical client secret / UDM psk rotated?
+4. Confirm agent runtime placement: Docker Compose on the Mac Studio (leaning) vs in-cluster.
+5. What is "Azure Plan 2" — an Azure subscription (needed for Azure Bot), or Entra ID P2? Is there an active subscription?
+6. Which mailbox should the helpdesk agent work on — your primary, or a dedicated one (safer)?

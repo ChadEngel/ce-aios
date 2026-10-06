@@ -1,0 +1,37 @@
+# Decision log (AIOS) — newest first. Why we chose X, so nobody re-litigates it.
+
+## 2026-10-04 — Tenant confirmed: personal `engelmn.com` (M365 Business Premium)
+Chad confirmed the tenant is personal, with Teams licensing and "Azure Plan 2" (meaning TBD). Employer tenant remains off-limits. Per-agent Entra app registrations, mailbox-scoped, no send/delete; Teams two-way via Azure Bot only after outbound-only phase. Chad creates registrations. See `roadmap/ai-it-team.md`.
+
+## 2026-10-04 — Email/Teams are Microsoft 365, not Google
+Chad runs M365 and can create Entra app registrations. Use Microsoft Graph (not Gmail API). Tenant (personal vs employer) still UNANSWERED; employer tenant is off-limits without explicit policy clearance. See `roadmap/ai-it-team.md`.
+
+## 2026-10-04 — Goal is an "AI IT team"; build one hire at a time
+Order: NOC (read-only) → Patch → Facilities (HA) → Helpdesk (M365 email/Teams) → Network. Orchestrator alongside #1. Level 2 (secrets) is the literal prerequisite — agents need scoped, revocable, audited credentials like any new IT hire.
+
+## 2026-10-04 — Reject ownjarvisai.com
+It's a hosted SaaS (Gmail/Stripe/LinkedIn/HubSpot via their cloud), $47 "founding" offer with deadline, stacked bonuses, unverifiable backing claim, upsell. Not self-hostable, no framework to conform to, opposite of the Infisical/VLAN-scoped trust model. Decision: build the equivalent ourselves on Open WebUI + Bifrost + Ollama + MCP. Do not log into or give credentials for third-party member portals.
+
+## 2026-10-04 — No k3s on the Mac Studio; k3s node idea withdrawn
+k3s needs Linux (so macOS would need a VM) and nothing in Chad's goal requires it: Ollama already runs there and Open WebUI is reachable everywhere. If an agent runtime moves to the Studio, use Docker Compose (Chad's Feb 2026 design), keep Ollama native (Metal GPU), front it with the existing Traefik. (Earlier "join as k3s worker" advice was over-engineered.)
+
+## 2026-10-04 — Home Assistant is outside scope → exception required
+HA = 192.168.250.168 (VLAN 1). Needs Chad's explicit approval + narrow firewall allow before any agent touches it. PENDING.
+
+## 2026-10-04 — Don't roll back UDM firmware 5.1.33 (from home-network-config)
+Port flap root-caused to Tablo t4g → STP TCN on CAESW002; fixed by locking port 9 to 100M FDX. Source: that repo's decision log.
+
+## 2026-08-17 — Claude vs. Bifrost-routed models
+Keep strategy/orchestration/long-horizon work on a frontier model (open models still lose coherence in long agent loops); route narrow, repeatable, private, or high-volume work (Lauren's workspace, scripted homelab tasks) to local models via Bifrost. Self-hosting only pays economically above ~5–10M tokens/month. Re-test the orchestrator role empirically.
+
+## 2026-08-17 — Kids' AI-literacy idea: build for Lauren first, not a business
+Market is not empty (Learning.com, Day of AI, Common Sense, state policy). Niche = local model on family hardware with parent-controlled filtering. Do not scope a company before one kid uses it.
+
+## 2026-08-17 — Level 2 target: close Influx migration + all secrets into Infisical
+Chosen over new builds because it's nearly done, Chad named it himself, and it gates safe agent access.
+
+## 2026-08-16 — Hard rules established
+Everything through Infisical (no exceptions); infra work scoped to 192.168.30.0/24 and ask before leaving it; direct, low-fluff voice; one recommendation not a menu; "unconfirmed" over guessing.
+
+## 2026-08-16 — Pattern identified
+Chad has many good ideas and finishes few, limited by unscheduled free time (full-time job, kid's sports, family). Default to finishing the nearly-done thing; flag competing new threads once.

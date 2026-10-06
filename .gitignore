@@ -1,0 +1,16 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# Anything that ever holds a secret, even temporarily
+.env
+.env.*
+*.env
+secrets/
+*.local.*
