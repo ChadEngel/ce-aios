@@ -29,6 +29,11 @@ Orchestrator work starts alongside #1 (route NOC questions to the NOC tool).
 - **Hardening before any write tool:** `enforce_auth_on_inference` is currently **OFF**, and Agent Mode does not support streaming (Open WebUI streams by default).
 - Server credentials come from **Infisical**, never plaintext in Bifrost config (`config.db` on the PVC does not survive PVC recreation — re-apply after rebuild).
 
+## T4 design result (2026-10-04) — see `t4-noc-mcp-design.md`
+**Blocker found:** Bifrost **403s any MCP client pointing at a private/loopback address unless dashboard auth is enabled** (reproduced live). Every lab service is RFC1918, so **enabling Bifrost dashboard auth is a hard prerequisite** for any MCP client — issue **T6**. It also closes the "no auth gate on tool execution" hole (set `enforce_auth_on_inference` in the same change).
+**One server covers NOC:** `grafana/mcp-grafana` (official, `--disable-write`, `streamable-http`) = **Loki + Grafana + InfluxDB**. Old "build MCP servers" (H2) becomes "deploy one container."
+**Next:** Chad enables Bifrost auth (T6) → deploy `mcp-grafana` read-only → register `grafana-noc` client + `aios-noc` Virtual Key (R0) → prove one LogQL query (T5).
+
 ## Helpdesk on M365 (personal tenant `engelmn.com`; Chad creates app registrations)
 - **Mail:** Microsoft Graph via an Entra app registration (one per agent). Needs `Mail.ReadWrite` to move/flag; app-only permissions are tenant-wide by default, so **restrict to a single mailbox** (Exchange Online RBAC for Applications / application access policy — verify current Microsoft guidance). Prefer certificate or short-lived secret stored in Infisical, with expiry + rotation. v1: read + categorize + flag + move (moves are reversible); **no send, no delete**. Treat message content as untrusted data (prompt injection).
 - **Teams:** two-way chat needs an Azure Bot (single-tenant) whose messaging endpoint is a public HTTPS URL — this conflicts with the lab's no-inbound-ports posture. Options, in order: (1) outbound-only first (Pushover now; Teams incoming webhook/Workflow), (2) later add a Cloudflare Tunnel (Chad already uses Cloudflare) exposing only the bot endpoint, (3) avoid exposing anything by polling. Decide when we get there.
