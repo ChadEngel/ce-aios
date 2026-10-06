@@ -7,14 +7,15 @@
 
 ## Finding 3 — APPLIED + LIVE (2026-10-06); two wiring traps found in source
 
-**Status (updated session 5): applied to the live cluster; merge-safety and
-registration verified. T5 (one tool call) still pending — see
-`t4-t5-execution-state.md`. Two execution findings: MCP client names forbid
-hyphens (`grafana-noc` → `grafana_noc`, fixed everywhere), and upstream
-Bifrost v2.2.6 (released 2026-10-06, pulled via `latest`+Always) now locks
-`/api` when dashboard auth is off and no `setup_token` exists — management
-routes 403; inference and `/mcp/*` unaffected (decision pending, see N1/N2 in
-`open-items.md`).** The Grafana
+**Status (updated session 5): APPLIED + PROVEN.** Executed 2026-10-06; T5 (#31)
+passed end-to-end — VK-authed external call chain Mac → traefik → bifrost →
+mcp-grafana → Grafana: `list_datasources` returned the recorded UIDs, one Loki
+read returned real labels. #30+#31 closed. Execution findings: MCP client
+names forbid hyphens (`grafana-noc` → `grafana_noc`, fixed everywhere);
+upstream v2.2.6 (pulled via `latest`+Always) locks `/api` while dashboard auth
+is off; **the `/mcp/*` gateway itself is unauthenticated** (LAN-only exposure,
+read-only tools) — all three consolidated into #33 for decisions. Full state:
+`t4-t5-execution-state.md`. The Grafana
 service-account token is in Infisical and was **verified live**: `sa-1-ai-token`
 (`service-account:2`, not a Grafana admin), Loki `GET /api/datasources/proxy/uid/loki/loki/api/v1/labels` → **200**,
 `POST /api/folders` → **403**. Read-only confirmed.

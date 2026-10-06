@@ -10,8 +10,8 @@ pending from Chad. Runbook = `t4-t5-runbook.md`; design = `t4-noc-mcp-design.md`
 |---|---|
 | 1 — apply (Infisical sync → mcp-grafana → bifrost ConfigMap + restart) | **DONE, live** |
 | 2 — verify registration (clients + VKs) | **DONE** (via sqlite, not `/api` — see Bug 2) |
-| 3 — T5 proof (one read-only tool call end-to-end) | **HALF DONE** — `initialize` + `tools/list` proven; **tool CALL still pending** |
-| 4 — record + close #31/#30 | NOT DONE |
+| 3 — T5 proof (one read-only tool call end-to-end) | **DONE — PASS** (VK-authed, real data returned) |
+| 4 — record + close #31/#30 | **DONE** — both closed as completed; follow-ups filed as **#33** |
 | 5 — rollback | not needed; no breakage |
 
 ## What is live and verified
@@ -83,6 +83,22 @@ enables scripted access via `X-Bifrost-Setup-Token` header.
   caused silent v2.2.3→v2.2.6 with a behavior change mid-deploy — contradicts the
   repo's own pinning convention (`8fe3c26` reverted digest-pinning).
 
+## T5 proof — PASS (recorded on #31, closed 2026-10-06)
+
+Full external chain from the Mac, VK-authed (`Authorization: Bearer aios-noc`):
+`Mac → traefik (llm.caehomelab.com) → bifrost → mcp-grafana → Grafana (SA token)`
+
+1. `initialize` → 200 (`bifrost v2.2.6`)
+2. `tools/list` → 20 tools, prefixed `grafana_noc-`
+3. `tools/call` `grafana_noc-list_datasources` → 200: **InfluxDB (`dfdkew37wk1dse`), Loki (`loki`)** — UIDs match the design doc
+4. `tools/call` `grafana_noc-list_loki_label_names` (`datasourceUid=loki`) → 200: real labels `[app, facility, host, job, service_name, severity, source]`
+
+## Post-execution findings (filed as #33; decision pending Chad)
+
+1. MCP client names forbid hyphens → renamed `grafana-noc` → `grafana_noc` (Bug 1 above, fixed).
+2. `latest`+`Always` pulled v2.2.6 mid-deploy → `/api` setup lock (Bug 2 above, open).
+3. **`/mcp/*` gateway accepts unauthenticated calls** (unauthed `tools/list`/`tools/call` → 200). Bounded: `llm.caehomelab.com` DNS is a LAN-only A record (192.168.30.217, not proxied) and tools are read-only — but the raw gateway bypasses VK scoping entirely. Candidate fixes: dashboard auth, ingress middleware auth on the MCP path, or cluster-internal-only `/mcp/*`.
+
 ## Local probe assets (reusable)
 
 - `/tmp/t5probe.sh` — drives `/mcp/grafana-noc` via `kubectl exec ... wget`
@@ -92,16 +108,10 @@ enables scripted access via `X-Bifrost-Setup-Token` header.
   `governance_virtual_keys`, `governance_virtual_key_mcp_configs`,
   `governance_virtual_key_provider_configs`.
 
-## Remaining to finish T4/T5 (in order)
+## Remaining to finish T4/T5 (in order) — ALL DONE 2026-10-06
 
-1. **T5 tool call:** call ONE read-only tool end-to-end (suggest
-   `grafana_noc-list_loki_label_values` or `list_datasources`) through the
-   gateway, show real output. VK-authed path (Bearer the `aios-noc` value) vs
-   unauthed gateway — prove the VK path since that's the agent's path.
-2. Chad decisions: setup_token (A/B above); image pinning.
-3. Comment results on #31, close #31 then #30; flip design doc Finding 3 →
-   "applied + proven".
-4. Separate explicit yeses still owed: commit ce-ai-home-lab; delete orphan
-   `GRAFANA_API_TOKEN` (Q-T4-6).
-5. Then pivot to Chad's **unrelated Grafana task** (not yet specified) — he asked
-   for it before going further on AIOS.
+1. ~~T5 tool call~~ DONE (results above; #31 closed).
+2. Chad decisions: setup_token (A/B) + image pinning + unauthed-gateway fix → **#33**.
+3. ~~Comment + close #31/#30~~ DONE. Design doc Finding 3 → "applied + proven".
+4. Separate explicit yeses still owed: commit ce-ai-home-lab (N4); delete orphan `GRAFANA_API_TOKEN` (Q-T4-6 / N5).
+5. ~~Pivot to Chad's unrelated Grafana task~~ — now in progress (details tracked in-session).

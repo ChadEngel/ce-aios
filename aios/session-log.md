@@ -7,6 +7,8 @@
 - **Merge safety proven at the DB layer:** `ce-key` + `ce-pi-macbook` VKs unchanged, `aios-noc` auto-generated. Verified via sqlite on a copied config.db (`/api` was locked).
 - **T5 half-proven:** `/mcp/grafana-noc` initialize → 200; `tools/list` → 20 read-only-tiered tools. Actual tool **call** still pending.
 - **Next:** T5 tool call → close #31/#30; Chad decides setup_token + image pinning (latest+Always caused silent v2.2.3→v2.2.6 drift); then Chad's unrelated Grafana task.
+- **T5 PASSED + #30/#31 closed (2026-10-06).** VK-authed external chain (Mac → llm.caehomelab.com → bifrost → mcp-grafana → Grafana): `list_datasources` → recorded UIDs; `list_loki_label_names` → real Loki labels. UIDs matched design doc exactly.
+- **New finding:** the `/mcp/*` gateway itself accepts **unauthenticated** tool calls (unauthed `tools/list`/`tools/call` → 200). Bounded today (LAN-only DNS A record, read-only tool set) but bypasses VK scoping — candidate fixes: dashboard auth / ingress middleware / cluster-internal-only. Consolidated with the setup-lock + pinning decisions into **#33** (`status:waiting-on-chad`). Handoff state updated in `t4-t5-execution-state.md`.
 
 ## 2026-10-06 (session 4)
 - **T4 (#30) R1 artifacts written** to `ce-ai-home-lab` (nothing applied): `applications/mcp-grafana/` (Deployment+Service+NetworkPolicy, pinned `grafana/mcp-grafana:2.0.1`), `bifrost-config` ConfigMap + `subPath` mount at `/app/data/config.json`, and `mcp-grafana-secrets-sync` in `infisical-secrets-sync.yaml`. All pass `kubectl apply --dry-run=client`.
