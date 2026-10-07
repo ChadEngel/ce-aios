@@ -8,13 +8,13 @@ Status key: OPEN · BLOCKED · NEXT · PARKED · DONE?
 | ID | Item | Status |
 |---|---|---|
 | N1 | `/api` locked by upstream Bifrost v2.2.6 setup lock | **RESOLVED (A)** — `BIFROST_SETUP_TOKEN` env from Infisical → `bifrost-secrets` → pod env; verified 401-without/200-with-header (+403 wrong token); #33 comment. B (dashboard auth) = T6/#32 remains |
-| N2 | Pin Bifrost image (tag/digest) instead of `latest`+Always — silent v2.2.3→v2.2.6 drift with behavior change mid-deploy; contradicts repo pinning convention | OPEN (Chad's earlier deliberate choice, needs his yes) |
+| N2 | Pin Bifrost image (tag/digest) instead of `latest`+Always — silent v2.2.3→v2.2.6 drift with behavior change mid-deploy; contradicts repo pinning convention | **DONE 2026-10-07** — `maximhq/bifrost:v2.2.6@sha256:d0b4708…` + `IfNotPresent` (tag list digest == running imageID, verified vs Hub); lab `daa7036` |
 | N3 | T5 completion: one read-only tool call through `/mcp/grafana-noc` (initialize + tools/list already proven → 20 tools) | **DONE 2026-10-06** — VK-authed `list_datasources` + `list_loki_label_names` → 200, real data; #31 closed |
-| N6 | `/mcp/*` gateway accepts unauthenticated calls (LAN-only exposure today; bypasses VK scoping) | OPEN — **#33** |
+| N6 | `/mcp/*` gateway accepts unauthenticated calls (LAN-only exposure today; bypasses VK scoping) | **RESOLVED 2026-10-07** — `client_config.enforce_auth_on_inference=true` via setup-token `PUT /api/config` in #33; live matrix: unauthed /mcp+​/v1 → 401, aios-noc VK → 200/20 tools, ce-key → 200 /v1 + 403 /mcp; survives restart (DB-backed); CM header documents the no-`client`-section caveat |
 | N7 | Commit `udm-syslog.json` to git — lives only in cluster CM + script carry-forward; no restore source if lost (same class of loss as mac-system-monitor) | **DONE** — extracted byte-for-byte from live CM, committed `4a8c067` (lab repo) |
 | N8 | Grafana pods OOMKilled (both, exit 137, 2026-10-03; limit 768Mi) — state is Postgres-backed so restarts are harmless now, but churn = noise; raise memory limit (768Mi → 1.5–2Gi, request 512Mi) | OPEN — **#34** |
 
-N1/N2 (setup_token vs dashboard auth; image pinning) consolidated into **#33** (`status:waiting-on-chad`).
+N1/N2/N6 consolidated under **#33** — CLOSED 2026-10-07 (A + image pin + enforcement); B (dashboard auth) = T6/#32 remains.
 | N4 | Commit ce-ai-home-lab working tree | **DONE** (Chad's yes, 2026-10-06): pushed 4 commits to `origin/headlamp-addition` — T4 MCP artifacts `952b21d`, user's PVC migration `5b12b38`, `grafana_noc` rename `576e269`, `udm-syslog.json` tracking `4a8c067`. Branch leads `origin/main` by 8 (Headlamp work + T4); merge to main when he's ready |
 | N5 | Delete orphan `GRAFANA_API_TOKEN` from Infisical (Q-T4-6) | BLOCKED on explicit yes |
 

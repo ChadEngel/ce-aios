@@ -57,3 +57,14 @@
 
 ## 2026-08-16/17 (session 1)
 - Level 1 discovery; read jarvis + ce-ai-lab; named Level 2 target; created `aios/context.md` and README; researched kids-AI market and Claude-vs-local models.
+
+## Session 6, cont. 2 (2026-10-07) — #33 "do it": image pin + /mcp closure → CLOSED
+- **Key facts established (source-verified at tag `transports/v2.2.6`, `/tmp/bifrost-src` shallow clone):**
+  - Hub tag is `v2.2.6` (with the v) — `2.2.6` does not exist; tag's LIST digest == the running imageID `d0b4708…` (per-arch digests differ; pin the list digest).
+  - `enforce_auth_on_inference` lives in ClientConfig; `mcp_server_auth_mode: headers` (current) = default that accepts anonymous MCP callers; no upstream MCP-only caller-auth knob exists.
+  - config-vs-DB semantics (`loadClientConfig`): with `source_of_truth: split`, a `client` section present in config.json **force-wins** over DB (`forceClientSync`); an explicit `enforce_auth_on_inference` in the file always wins; DB value persists across restarts while the file has no `client` section. API edits don't bump ConfigHash.
+  - `PUT /api/config` round-trips `client_config` built on the live struct with field-explicit merge via `HasInferenceAuthSetting()`; `EnforceGovernanceHeader`/`EnforceSCIMAuth` are synced aliases.
+- **Identity resolution:** `BIFROST_API_KEY` = **ce-key** VK; pi Studio default provider key = **ce-pi-macbook** VK; `aios-noc` VK (T5) only in config.db (plaintext) — extracted once from DB copy for testing, temp file deleted. VK↔MCP assignment layer (`governance_virtual_key_mcp_configs`) explains 403s for non-assigned VKs (correct denial, not breakage).
+- **Executed:** `PUT /api/config` flip (live, no restart) → image pin in kustomization (tag+digest, IfNotPresent) + CM-header documentation of the no-`client`-section caveat → `kubectl apply -f` (this kustomization.yaml is a multi-doc manifest: `-k` fails with "unknown field spec") → rollout.
+- **Verified post-restart:** unauthed /mcp → **401** (was 200 bypass), aios-noc → 200/20 tools, ce-key → 200 /v1 (Open WebUI intact, zero 401s in its logs) + 403 /mcp, unauthed /v1 → 401, /health + /api/version → 200, DB flag = 1. T6's enforce half done as part of this; #32 remains for dashboard auth only (scope-update comment posted).
+- **Records:** lab `daa7036` pushed; #33 closed with matrix comment; open-items N2/N6 resolved, N1/N2/N6 consolidation note → #33 CLOSED. Traps hit: SPA catch-all returns 200+HTML for bogus `/api` GETs (probe bodies, not status); `gh issue comment -q .url` prints the URL — don't use for verification (use `gh issue view --json comments`).
