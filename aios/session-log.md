@@ -84,3 +84,23 @@
 - **Decision (decisions.md 2026-10-07 entry):** background agent loop runs **in-cluster** (`aios-manager`, ns `ai`). Studio keeps Ollama native/Metal (inference provider) + interactive pi sessions only. Rationale: one secret path (operator sync proven ×9), one observability path (Loki), one network policy, always-on host; util-server measured 6% CPU / 1.9Gi of 4.9Gi used. Supersedes Feb Compose-on-Studio design (predates spike #14's scope shrink).
 - **#15 closed** with rationale + Phase-1 unblock note. **#2 (Manager Phase 1) now unblocked** — remaining human step: GitHub App (Issues R/W) install + private key into Infisical.
 - **Tooling trap:** `gh issue comment --body "…\`code\`…"` inside double quotes — escaped backticks still trigger command substitution in some quoting chains (first attempt substituted `aios-manager` → empty, and `\n` stayed literal). Fixed via `gh api PATCH …/issues/comments/<id> -F body=@/tmp/file.md`. Rule: **always post bodies from files** (`gh api -F body=@file`), never inline.
+
+## Session 6, cont. 6 (2026-10-07) — handoff: everything clean, safe to quit
+**Today's full ledger (all merged, all verified):**
+1. **#33 closed** — Bifrost `v2.2.6@sha256:d0b4708…` pinned (+IfNotPresent; Hub tag needs the `v`) and unauthed `/mcp` bypass CLOSED via `client_config.enforce_auth_on_inference=true` (setup-token `PUT /api/config`, DB-backed, survives restart; applied live with zero breakage). Verified matrix: unauthed /mcp + /v1 → 401; `aios-noc` VK → 200/20 tools on `/mcp`; `ce-key` (Open WebUI) → 200 `/v1` + 403 `/mcp`; pi's `ce-pi-macbook` VK unaffected. Lab `daa7036`.
+2. **Merged PR #9 → `main`** (Headlamp + T4 tool plane + hardening, 10 commits); lab and ce-aios now **`main`-only** — ALL branches deleted incl. `chore/pre-udm-swap-2026-09-27` (Chad's verdict, 12 commits; recovery SHA `14b3979bd5ba375335317b524b3d4166b959a07e`).
+3. **Hard rule 6** (operating-rules.md): never commit/push to `main` on origin — branch → PR → merge. Dogfooded across every change since (ce-aios PRs #35/#37/#38/#41, lab PRs #9/#10).
+4. **#34 closed** — grafana memory 512Mi req / 1536Mi lim (2Gi rejected: node allocatable ~4.8Gi); applied live, 2/2 running, 8 dashboards. Lab PR #10 → `8a22654`.
+5. **N5 closed** — orphan `GRAFANA_API_TOKEN` deleted from Infisical by Chad (UI). Confirmação-based, not proof-based: machine cannot verify (REST 404 for identities, CLI unauthed); cluster side verified zero-risk (never synced, zero refs, operator clean).
+6. **T2 DECIDED + #15 closed** — background agent loop runs **in-cluster** (`aios-manager`, ns `ai`); Studio = Ollama provider + interactive only. `decisions.md` 2026-10-07 entry. #2 (Phase 1) UNBLOCKED: Chad = GitHub App (Issues R/W, no webhook) + private key into Infisical; assistant = build `aios-manager` skeleton (python image, Deployment/InfisicalSecret/NetworkPolicy, VK `aios-manager`, Loki).
+
+**Where a new session picks up:** open issues are ALL waiting-on-Chad: #2 part 1 (GitHub App — exact steps in the #2 comment of 2026-10-07), #32 (dashboard auth, human-executed), #20/#21/#9 (HA/Entra/rotations). On Chad's "go" after App install: build `aios-manager` skeleton in the LAB repo on a branch (rule 6). Manager Phase 0 ("run the manager" in-session `gh`) remains available anytime.
+
+**New traps logged today (for future sessions):**
+- Hub tags carry the `v` (`v2.2.6` exists, `2.2.6` does not); pin tag+LIST-digest (per-arch digests differ from pod imageID).
+- `kubectl apply -f kustomization.yaml` (multi-doc manifest) — `-k` fails: `unknown field "spec"`.
+- `/api` GET on unknown routes returns **200 + HTML** (SPA catch-all) — verify by content type/body, never status alone.
+- `gh issue comment --body "…\`code\`…"` inline mangles backticks + literal `\n`; ALWAYS post bodies from files (`gh api -F body=@file` / `--body-file`).
+- `git branch --merged|--no-merged origin/main` covers LOCAL branches only; verify remote merge-state with `-r` or `rev-list --count origin/main..origin/<branch>`.
+- `client` section in config.json + `source_of_truth: split` = file force-wins on boot (enforcement flag can be reverted by accident — CM header documents it).
+- Reusable: `/tmp/bifrost-src` = full v2.2.6 source clone (public repo); `/tmp/bf` = earlier sparse extract; `/tmp/t5probe.sh` clean (no embedded VK); aios-noc VK material recovers from `governance_virtual_keys` in a fresh config.db copy.
