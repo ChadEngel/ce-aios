@@ -1,5 +1,17 @@
 # Decision log (AIOS) — newest first. Why we chose X, so nobody re-litigates it.
 
+## 2026-10-07 — T2 decided: background agent loop runs in-cluster; the Mac Studio stays the inference provider, not a runtime host
+**Chosen: Option B (in-cluster), `aios-manager` in ns `ai`** (Manager Phase 1, and the same loop-home pattern for future personal agents). Supersedes the Feb Compose-on-Studio design — that predates the T1 spike; scope shrank to "where does the background LOOP run" after `#14` proved Bifrost already is the tool plane.
+
+- **One secret path:** the InfisicalSecret → operator → k8s Secret sync is already proven in production here (`bifrost-secrets`, `mcp-grafana-secrets`, 9 syncs). Compose-on-Studio would mean a second client + a second audit surface.
+- **One observability path:** util-server already runs Loki + Grafana; manifests route agent logs there by default. Studio would duplicate pipeline config.
+- **One network fabric:** util-server sits in the lab VLAN today; the agent loop needs egress to `llm.caehomelab.com` (Bifrost), `secrets.caehomelab.com` (Infisical), `github.com` (issues API) — all reachable, one NetworkPolicy away. Studio placement would add another firewall allow-list to maintain.
+- **Survives the Studio:** the Studio is where interactive pi sessions and Ollama live; it gets rebooted/updated/idled by a human. The background loop must be always-on — that's the util-server's job description.
+- **Load fact (measured 2026-10-07):** util-server at 6% CPU, ~1.9Gi/4.9Gi allocatable used — the loop (~100–200Mi) fits trivially.
+- **Rejected: 2Gi limits on the same host** for the same reason (`#34` chose 1536Mi). Option A would additionally couple NOC uptime to Docker Desktop licensing/updates on macOS.
+- **What stays on the Studio:** Ollama native/Metal (the inference provider for local models), interactive pi sessions, anything Chad runs by hand. The loop only consumes them over the network.
+- **Phase-1 shape (unchanged from `manager-agent.md`):** `aios-manager` Deployment (or CronJob for the poller — decide at build time), GitHub App (not PAT) for Issues read/write, private key via InfisicalSecret sync, LLM via Bifrost `/v1` with the agent's own VK, tools via `/mcp/*`, R0/R1 only, every tool call → Loki.
+
 ## 2026-10-04 (CORRECTED) — `config.json` is how private-network MCP clients get registered
 **Correction:** I first claimed Bifrost blocks private-IP MCP clients until dashboard auth is on. **Wrong.** The `rejectPrivateMCPTargetIfAuthBypassed` guard fires **only** on the HTTP management API and **only when auth is bypassed** (`BifrostContextKeyAuthBypassed`); the `config.json` startup path (`loadMCPConfig` → `CreateMCPClientConfig`) never calls it. Docs: *"…or define the client in `config.json` instead."* So **`config.json` (git-tracked, declarative) both satisfies the reproducible-from-git rule and bypasses the auth gate.** Enabling dashboard auth is now **optional hardening**, not a prerequisite. Also: `source_of_truth: split` (default) merges DB + file per-section, so adding `mcp.client_configs` won't drop existing DB virtual keys. Trap: never set `version: 1` — `applyV1Compat` backfills all clients into any VK with empty `mcp_configs`. (2) **`grafana/mcp-grafana`** (official, Go) covers **Loki + Grafana + InfluxDB** in one server, read-only via `--disable-write`, HTTP via `streamable-http`. Design: `roadmap/t4-noc-mcp-design.md`.
 
