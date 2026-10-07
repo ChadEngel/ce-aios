@@ -16,7 +16,7 @@ Status key: OPEN · BLOCKED · NEXT · PARKED · DONE?
 
 N1/N2/N6 consolidated under **#33** — CLOSED 2026-10-07 (A + image pin + enforcement); B (dashboard auth) = T6/#32 remains.
 | N4 | Commit ce-ai-home-lab working tree | **DONE** (Chad's yes, 2026-10-06): pushed 4 commits to `origin/headlamp-addition` — T4 MCP artifacts `952b21d`, user's PVC migration `5b12b38`, `grafana_noc` rename `576e269`, `udm-syslog.json` tracking `4a8c067`. Branch leads `origin/main` by 8 (Headlamp work + T4); merge to main when he's ready |
-| N5 | Delete orphan `GRAFANA_API_TOKEN` from Infisical (Q-T4-6) | BLOCKED on explicit yes |
+| N5 | Delete orphan `GRAFANA_API_TOKEN` from Infisical (Q-T4-6) | **DONE 2026-10-07** — Chad deleted via UI (his confirmation). Machine-side verification unavailable on this build (secret-read REST routes 404 for identity tokens; CLI unauthenticated); cluster-side blast radius verified zero: never synced into any InfisicalSecret, zero manifest references, operator logs clean, `mcp-grafana-secrets` = only `GRAFANA_SERVICE_ACCOUNT_TOKEN`, grafana healthy (8 dashboards) |
 
 ## P0 — Level 2: secrets + Influx (prerequisite for every agent)
 | ID | Item | Status | Notes |
