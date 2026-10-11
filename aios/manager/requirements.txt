@@ -1,0 +1,4 @@
+# aios-manager test/script dependencies
+# PyJWT 2.x requires `cryptography` for RS256 (RSA) signing
+PyJWT[crypto]>=2.8.0
+requests>=2.32.0
