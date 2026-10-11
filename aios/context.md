@@ -1,6 +1,6 @@
 # AIOS — Chad Engel Context File
 
-Last updated: 2026-10-07 (rev 5: Bifrost hardened + pinned; T2 decided in-cluster; git rule 6 branch-only workflow)
+Last updated: 2026-10-11 (rev 6: Phase 0.5 aios-manager GitHub App end-to-end verified — JWT mint, install token, Issues read+write+delete round-trip; PRs #41 + #42)
 Purpose: portable memory for any assistant (Claude, or a local model through Bifrost) working with Chad. Plain markdown, no vendor-specific syntax — paste into Claude Project instructions/knowledge, or an Open WebUI system prompt / knowledge base.
 
 ---

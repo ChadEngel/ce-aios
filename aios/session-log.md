@@ -1,5 +1,31 @@
 # Session log
 
+## 2026-10-11 (session 7) — Phase 0.5: aios-manager GitHub App end-to-end verified
+- **Chad:** "you can ssh to the util server so you can do all 3" — verified Phase 0.5 + write scope + shipped two clean PRs.
+- **Phase 0.5 (developer-machine auth, #2 part 1 satisfied for the dev side):** ran `aios/manager/test_github_app.py` against the aios-manager App (id **5218173**, install **168700840**, repo `ChadEngel/ce-aios`, perms `[issues, metadata]`) using the `jarvis-jatg` Infisical project's machine-identity access token. Full chain: RS256 JWT (PyJWT 2.x + `cryptography`) → `GET /app` 200 → `GET /app/installations/168700840` 200 → `POST /app/installations/168700840/access_tokens` 200 → `GET /repos/.../issues` 200 (25 open issues listed).
+- **Write smoke test:** posted a comment to issue #2 (id `6110728919`, 201) → GET-back 200 (body matches) → DELETE 204 → GET-after-delete 404 → re-listed comments on #2 → 0 from `aios-manager[bot]`. Zero trace left; GitHub App audit log has the round trip.
+- **Two bugs fixed and shipped (PR #41, `fix/test-github-app-pyjwt-2-and-token-endpoint`):**
+  1. `make_jwt()`: PyJWT ≥ 2.0 requires `iss` to be a string per RFC 7519. Cast `int(APP_ID)` → `str(int(APP_ID))`.
+  2. `get_installation_token()`: wrong endpoint — `/installations/{id}/tokens` 404s; correct is `/access_tokens` (per the install object's own `access_tokens_url`). Updated the script + the docstring; verified.
+  3. (bonus) Added `aios/manager/requirements.txt` pinning `PyJWT[crypto]>=2.8.0` and `requests>=2.32.0`. The `[crypto]` extra was a silent runtime miss; documented so the next run doesn't waste 5 min on `NotImplementedError: Algorithm 'RS256'`.
+- **Traps hit (worth logging for future sessions):**
+  1. **PyJWT 2.x `iss` strictness** — silent in PyJWT 1.x, hard fail in 2.x. The `int(APP_ID)` pattern is everywhere in GitHub App examples; needs `str(...)` now.
+  2. **`/tokens` vs `/access_tokens`** — the install object literally tells you the right URL in its `access_tokens_url` field; the docs are also clear but the wrong path is the "obvious" one.
+  3. **`infisical run` does NOT auto-detect `INFISICAL_TOKEN` env var** — you must pass `--token "$INFISICAL_TOKEN"` (or the CLI will fall through to the interactive login flow, which fails in any non-TTY session). The `infisical-config.json` only sets the domain.
+  4. **`infisical run` strips its own auth env vars** in the child process (so the inner script can't read `INFISICAL_TOKEN` anymore) — fine, just don't try to use it as a passthrough.
+  5. **`infisical secrets list` doesn't exist** as a flat command in CLI 0.43.x. Use `infisical run -- sh -c 'env | awk -F= "/^[A-Z_][A-Z0-9_]*=/ {print \$1}" | sort'` to discover secret NAMES without printing values.
+  6. **Inline `python3 -c "..."` with apostrophes** — SyntaxError on escaped quotes inside the bash command line. The session trap log already warned about `gh issue comment --body "…\`code\`…"`; same hazard here. Fix: write body to a file, read it (`-F body=@file` / Python `open(...).read()`).
+  7. **`repos count: 0` on the install object is misleading** — the install's `repositories` field is paginated/embedded-empty by default; the install can still access the repos it was selected for (proven by 25 issues listed). Not a bug, just confusing.
+- **Setup pattern that worked (reusable):** `~/.ai-runner/<project>.env` (`chmod 600`, parent dir `chmod 700`) holds `INFISICAL_TOKEN` + `INFISICAL_PROJECT_ID`; `source` it in the same `bash` call as the `infisical run --token "$INFISICAL_TOKEN" --projectId "$INFISICAL_PROJECT_ID"` invocation. Token never enters chat or any committed file; `infisical run` audit-logs the secret read.
+- **PRs opened (rule 6, branch-only workflow):**
+  - **#41** `fix/test-github-app-pyjwt-2-and-token-endpoint` → `main` (test script + requirements.txt)
+  - **#42** `docs/session-7-github-app-verified` → `main` (this entry + small context.md note)
+- **Where we left off:** Phase 0.5 done. Phase 1 in-cluster deploy is now the real next step (still per #2). Remaining blockers / inputs for Phase 1:
+  - `infisical-universal-auth` Secret in `ns ai` (for the `InfisicalSecret` operator to sync from) — not yet verified to exist; would check next.
+  - NetworkPolicy egress lockdown: `aios/manager/k8s/networkpolicy.yaml` is `0.0.0.0/0:443,80` with a `# TODO: restrict`. Should be `api.github.com` + `secrets.caehomelab.com` + `llm.caehomelab.com` (and DNS at `10.43.0.10`) before any R1/R2.
+  - The real `aios-manager` Python service (currently a `time.sleep(86400)` placeholder in `deployment.yaml`).
+  - The same two script bugs are on `origin/feat/aios-manager-skeleton` — that branch needs the same fixes before it's rebased/merged; tracked as a follow-up to PR #41.
+
 ## 2026-10-06 (session 6) — Grafana: Mac System Monitor keeps disappearing
 - **Restored + root-caused.** `mac-system-monitor` (18 panels) was absent from live Grafana. Forensics in the Postgres unified-storage history (`resource_history`, table `dashboards/…` — Grafana 13 no longer uses the legacy `dashboard` table, which is why it reads 0): created 2026-09-19 04:37 (the `5174a68` restore), **deleted 2026-09-27 14:08 = exactly the grafana 2-replica HA cutover**, never re-added after that (10/03 OOMKills didn't matter — state is Postgres-backed).
 - **Mechanism:** dashboards are file-provisioned from ConfigMap `grafana-dashboards-json` → mounted at `/var/lib/grafana/dashboards/default`; provider `updateIntervalSeconds: 30` **deletes any provisioned dashboard whose file disappears from the mount**. The 9/27 cutover rebuilt that ConfigMap from a stale checkout that predates `5174a68` (which added `mac-system-monitor.json`) — file gone → dashboard deleted. Recurs every time the CM is rebuilt without the key.
