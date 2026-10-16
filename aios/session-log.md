@@ -189,3 +189,33 @@
 **Watch item added:** MSAL silent-refresh health — expect steady refresh now that scopes match; if the ~1h death pattern returns, check token-cache mtimes + `--verify-login --read-only` differential before assuming upstream regression.
 
 **Open:** digest CronJob (next — needs VK already in Infisical ✓, issue thread, muse-glimmer reasoning_effort none); `--enabled-tools` R0 mail subset tightening; aios-manager apply checklist (universal-auth Secret now EXISTS in ns `ai` ✓).
+
+## Session 9, cont. 3 (2026-10-16 PM) — digest CronJob LIVE (issue #50)
+
+`aios-mail-digest` CronJob deployed and PROVEN by manual run: list unread inbox
+via graph MCP (25 unread) → muse-glimmer local summary (11 per-message bullets,
+time-sensitive flagged `**now**`) → GitHub App comment on #50. Schedule
+`0 7 * * *` with `timeZone: America/Chicago` (no DST wobble, k8s ≥1.27).
+CronJob = own InfisicalSecret (`aios-mail-digest-secrets`, 4 keys incl.
+BIFROST_VK_AIOS_HELPDESK), egress-only netpol with 443-anywhere (needs
+RFC1918 for llm.caehomelab.com — opposite of the mail server's rule), amd64
+nodeSelector + image imported on BOTH workers.
+
+**New traps (session 9 cont. 3):**
+- **Bifrost attaches MCP tool schemas to /v1/chat/completions for VKs that
+  have MCP grants** — aios-helpdesk (graph grant, ~75 tools) inflated prompts
+  to 53,568 tokens (multi-minute prefill, LLM timeouts, "empty content
+  finish=length"). ce-key (no grant) = 62 tokens. The per-request deny header
+  `x-bf-mcp-include-clients` works BUT ONLY with a non-empty value: an empty
+  -H "header:" value never reaches Bifrost (proxy/curl strips it). Fix:
+  `x-bf-mcp-include-clients: __none__` (non-existing client = narrow to
+  nothing; headers narrow, never widen; /mcp/graph route unaffected).
+- **finish=length + empty content = reasoning burned the token budget.**
+  muse-glimmer with max_tokens 350 spent everything thinking → empty content.
+  Digest path pinned `reasoning_effort: none` AND raised max_tokens to 900.
+- Direct-Ollama-vs-Bifrost prompt-token differential (62 vs 53,568, identical
+  message) is the fastest way to fingerprint provider-side request inflation.
+
+**Open:** R0 window start (2 weeks daily digests → review); `--enabled-tools`
+mail-subset tightening; aios-manager image/apply (InfisicalSecret template
+fixed: container env GITHUB_REPO sourced from Infisical GITHUB_APP_REPO).
