@@ -1,5 +1,16 @@
 # Decision log (AIOS) — newest first. Why we chose X, so nobody re-litigates it.
 
+## 2026-10-16 — Helpdesk mail agent: mailbox = primary personal inbox; Softeria/ms-365-mcp-server adopted in HTTP trust-proxy-auth daemon mode
+Chad: "promote to primary now, to get it set up. We will start slow with what it should do." Design (`helpdesk-mail-agent.md`) + T-M1 spike resolved the two open architecture questions:
+
+- **Mailbox scope = Chad's primary mailbox from day one** (not a dedicated synthetic mailbox; NOT blanket-forwarding into a mirror — dual-state + identical exposure were the anti-patterns). PII mitigation is the routing rule: digest summarization runs on local Ollama models via Bifrost, never a frontier provider by default.
+- **Identity: delegated, not app-only.** The spike proved Softeria has no client-credentials flow but IS daemon-viable via `--http --trust-proxy-auth --read-only` (server's cached MSAL login, auth boundary = NetworkPolicy + Bifrost VK). Removes the Entra registration/cert/RBAC work entirely for R0 — #21's registration becomes optional hardening, batched with #27 (scheduler calendar app) when/if needed.
+- **Tradeoff accepted:** Graph calls act as Chad's identity (read-only acceptable); if a write tier (R2) is ever promoted, re-evaluate to app-only + RBAC fence (original design retained in the doc as rollback target) or reject the tier.
+- **New secret currency:** `MS365_MCP_SECRET_KEY` (token-cache encryption) in jarvis-jatg per the agent-creds boundary rule; token-cache PVC treated as a credential at rest.
+
+## 2026-10-11 — Agent credentials live in Infisical project `jarvis-jatg`; infra credentials stay in `caehomelab-v1q6`
+**Chosen by Chad:** agent-facing credential material (GitHub App secrets, aios-manager, future agent secrets) lives in the `jarvis-jatg` project; lab infrastructure credentials remain in `caehomelab-v1q6`. Rationale: the AI IT team's own creds are agent-namespace, audit together, and never share a project with infra creds. Consequence: in-cluster syncs for agent services add a per-project universal-auth K8s Secret (`jarvis-jatg-universal-auth` in ns `ai`) — universal-auth credentials are per-(project, env, role) and UI-created, so the existing shared `infisical-universal-auth` (bound to `caehomelab-v1q6`, used by 8 syncs) must NOT be replaced.
+
 ## 2026-10-07 — T2 decided: background agent loop runs in-cluster; the Mac Studio stays the inference provider, not a runtime host
 **Chosen: Option B (in-cluster), `aios-manager` in ns `ai`** (Manager Phase 1, and the same loop-home pattern for future personal agents). Supersedes the Feb Compose-on-Studio design — that predates the T1 spike; scope shrank to "where does the background LOOP run" after `#14` proved Bifrost already is the tool plane.
 
