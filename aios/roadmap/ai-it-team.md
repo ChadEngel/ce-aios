@@ -18,7 +18,7 @@
 | 1 | **NOC tech** (hire #1) | "What's broken / what changed?" — triage alerts, LogQL/Flux queries, summarize | Loki, Grafana, InfluxDB read, kubectl read-only | R0 | Infisical identity `aios-noc` (proposed): INFLUXDB_READ_TOKEN + Grafana viewer + Loki read + k8s read-only SA. VLAN 30 only | NEXT |
 | 2 | Patch tech | Report image/firmware/OS currency vs digest-pinned versions; "tell me, don't apply" | registry/GitHub release feeds, kubectl read | R0→R1 | read-only + internet egress | after #1 |
 | 3 | Facilities tech | Home Assistant re-design help, entity/automation audit, proposed YAML PRs via the HA repo deploy pipeline | HA REST/MCP, HA repo | R0→R1 | read-only HA token; **scope exception + firewall allow pending** | blocked on approval |
-| 4 | Helpdesk / ops coordinator | Email triage (move to folders, flag/highlight important) and Teams/text interface | Microsoft Graph (M365), Teams, Pushover | R1→R2 | Entra app registration(s) — see below | UNBLOCKED (tenant confirmed); waits for hires #1–#3 |
+| 4 | Helpdesk / ops coordinator | Email triage (move to folders, flag/highlight important) and Teams/text interface | Microsoft Graph (M365), Teams, Pushover | R1→R2 | Entra app registration(s) — see below | **NEXT — mail v1 (reprioritized 2026-10-11).** Design: `helpdesk-mail-agent.md`; registration gate: #21. Teams half + full R1/R2 remain behind the R0 gate |
 | 5 | Network tech | Segmentation plan execution support, firewall-rule review, UDM config diffing | UDM read-only API key, home-network-config repo | R0→R1 | UDM_API_KEY read-only; never SSH/root | later |
 Orchestrator work starts alongside #1 (route NOC questions to the NOC tool).
 
