@@ -167,3 +167,7 @@
 - Reasoning-capable Ollama models: empty `message.content` ≠ broken model — check `message.thinking` length and burn rate (`eval_count`) before verdicts; set `think:false` for R0-class tasks.
 - Bifrost provider/model registry lives in **config.db** (split source-of-truth) — the git-tracked `bifrost-config` CM carries only `$schema`/`mcp`/`governance`; read live state via setup-token `/api`, not the CM.
 - When probing hosts by name, resolve FIRST (`dscacheutil -q host`): `aiserver.home` (.30.10) and `chad-studio.home` are different Mac Studios — assuming "Ollama is local here" from context alone burned time.
+
+**Session 9 addendum (same day) — muse-glimmer verified end-to-end through Bifrost:**
+- `ollama/muse-glimmer:latest` confirmed registered (VK-gated `/v1/models`, 11 models; Chad saw it in the dashboard independently). VK-gated list used `BIFROST_API_KEY` from `bifrost-secrets` → `~/.ai-runner/bifrost-ce-vk` (600, the `ce-key`/Open WebUI VK — read-only GET usage only).
+- **DEPLOY-TIME VERIFY resolved:** Bifrost v2.2.6 maps `reasoning_effort` → ollama think-level on the ollama provider. `\"none\"` = 0 reasoning chars, 165 completion tok, correct triage (plain = 766 tok incl. 2957ch reasoning); `\"low\"` ≈ 868ch reasoning remains. Prompt-level `/no_think` suffix NOT honored by the model's template. Digest spec pins `reasoning_effort: \"none\"`.
