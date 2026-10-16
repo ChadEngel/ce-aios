@@ -171,3 +171,21 @@
 **Session 9 addendum (same day) — muse-glimmer verified end-to-end through Bifrost:**
 - `ollama/muse-glimmer:latest` confirmed registered (VK-gated `/v1/models`, 11 models; Chad saw it in the dashboard independently). VK-gated list used `BIFROST_API_KEY` from `bifrost-secrets` → `~/.ai-runner/bifrost-ce-vk` (600, the `ce-key`/Open WebUI VK — read-only GET usage only).
 - **DEPLOY-TIME VERIFY resolved:** Bifrost v2.2.6 maps `reasoning_effort` → ollama think-level on the ollama provider. `\"none\"` = 0 reasoning chars, 165 completion tok, correct triage (plain = 766 tok incl. 2957ch reasoning); `\"low\"` ≈ 868ch reasoning remains. Prompt-level `/no_think` suffix NOT honored by the model's template. Digest spec pins `reasoning_effort: \"none\"`.
+
+## Session 9, cont. 2 (2026-10-16 PM) — mail agent DEPLOYED; T-M2 PASS; aios-helpdesk VK live
+
+**Deployed (ce-aios PR #48, lab PRs #11 + #12):** `aios-mail-mcp` running in ns `ai` on caelx003 (Softeria 0.168.0, `--http :3000 --trust-proxy-auth --read-only`), 64Mi cache PVC, ingress restricted to `app=bifrost` (verified: unlabeled probe pod denied), 443-egress with RFC1918 except. Bifrost `graph` MCP client live: 75 read-only tools, namespaced `graph-<tool>`.
+
+**T-M2 PASSED (via llm.caehomelab.com/mcp/graph + aios-helpdesk VK):** initialize 200 → `graph-get-my-profile` returns real Graph identity → `graph-list-mail-messages` returns live inbox items. VK key survived file declaration (value-less block, aios-noc precedent). Model scope on `/v1/models`: only `ollama/muse-glimmer:latest`.
+
+**New traps (burned this session):**
+- **Mixed-arch k3s cluster** (caelx002/caelx003 = amd64, util-server = arm64): `docker save | k3s ctr import` is NODE-LOCAL. Studio builds are arm64; the pod schedules on amd64 workers → ErrImageNeverPull until an amd64 buildx build is imported on the pod's node (`ssh cengel@<node>` + `sudo -n k3s ctr -n k8s.io images import -`; passwordless sudo works on all three).
+- **Lab repo merge ≠ apply**: lab manifests are applied by hand (`cat .../kustomization.yaml | ssh util-server kubectl apply -f -` — the file is raw YAML despite its name, NOT a kustomization). Bifrost subPath config also needs `rollout restart`. PR #11 existed 30+ min before its config reached the cluster.
+- **Login must carry the daemon's flags**: plain `--login` caches a FULL-scope MSAL grant; the `--read-only` daemon then fails silent refresh (~1h, at access-token expiry) with "Failed to acquire token". Scope match or death; verify via a real tool call through Bifrost, never a second `--verify-login` process (extra RT consumer). Symptom class documented upstream (#522). README step 4 amended.
+- **File-declared Bifrost MCP clients are in-memory only** (never persisted to `config_mcp_clients`): DB-side VK grants cannot reference them — grants must live in the file governance section (aios-noc pattern). PR #12 fixes the grant path PR #11 assumed was dashboard-side.
+- **Bifrost namespaces MCP tools `<client>.<tool>`** over raw MCP: callers (digest job) must use `graph-list-mail-messages` style names.
+- `kubectl kustomize` rejects the lab bifrost "kustomization.yaml" (raw multi-doc YAML) — apply with `-f`, not `-k`.
+
+**Watch item added:** MSAL silent-refresh health — expect steady refresh now that scopes match; if the ~1h death pattern returns, check token-cache mtimes + `--verify-login --read-only` differential before assuming upstream regression.
+
+**Open:** digest CronJob (next — needs VK already in Infisical ✓, issue thread, muse-glimmer reasoning_effort none); `--enabled-tools` R0 mail subset tightening; aios-manager apply checklist (universal-auth Secret now EXISTS in ns `ai` ✓).
