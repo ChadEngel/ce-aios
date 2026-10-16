@@ -1,0 +1,66 @@
+# NetworkPolicy for aios-manager
+#
+# Egress lockdown: the GitHub App private key is mounted into the pod as an
+# env var. If the pod is compromised, an attacker exfiltrating the key via
+# the network is the worst-case blast radius. Lock egress to ONLY:
+#   1. DNS to the k3s CoreDNS service (UDP + TCP 53) — required for name
+#      resolution of api.github.com
+#   2. api.github.com (TCP 443) — required for GitHub App JWT mint, install
+#      token mint, and issue reads/writes
+#
+# GitHub publishes their IP ranges at https://api.github.com/meta (api key).
+# These CIDRs are pinned at the time of writing (2026-10-11). Add a TODO to
+# re-fetch + re-apply on a schedule (or use a Cilium FQDN selector if/when
+# the lab adopts Cilium).
+#
+# Ingress: pod has no inbound service. The Service exposes port 8080 for
+# future use (healthz, /metrics) but Phase 1 doesn't need it; we deny
+# ingress explicitly so we don't accidentally open it later.
+#
+# NO egress to secrets.caehomelab.com — the operator handles secret sync;
+# the pod only reads from the mounted Secret.
+# NO egress to llm.caehomelab.com — the Phase 1 MVP doesn't make LLM calls;
+# the decision layer (which will) gets its own NetworkPolicy when added.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aios-manager
+  namespace: ai
+  labels:
+    app.kubernetes.io/name: aios-manager
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: aios-manager
+  policyTypes:
+    - Egress
+    - Ingress
+  # Default-deny ingress.
+  ingress: []
+  egress:
+    # 1. DNS to k3s CoreDNS (UDP + TCP 53).
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # 2. api.github.com (TCP 443). Pinned to GitHub's published IP ranges.
+    # Source: https://api.github.com/meta (key=api, IPv4 entries only).
+    # TODO: re-fetch quarterly OR migrate to a Cilium FQDN selector.
+    - to:
+        - ipBlock:
+            cidr: 192.30.252.0/22
+        - ipBlock:
+            cidr: 185.199.108.0/22
+        - ipBlock:
+            cidr: 140.82.112.0/20
+        - ipBlock:
+            cidr: 143.55.64.0/20
+      ports:
+        - protocol: TCP
+          port: 443

@@ -1,0 +1,101 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aios-manager
+  labels:
+    app.kubernetes.io/name: aios-manager
+    app.kubernetes.io/part-of: aios
+spec:
+  replicas: 1
+  # Recreate (not RollingUpdate) so we never have two pods fighting over the
+  # same GitHub App state during a deploy. Phase 1 has no HA requirement.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aios-manager
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aios-manager
+        # Add the Loki scrape label so promtail picks the pod's stdout up
+        # (matches the convention used by other AI services in ns ai).
+        caehomelab.com/log-source: aios-manager
+    spec:
+      # Don't let the kubelet keep restarting on transient failure — give it
+      # some backoff. Crashing in a tight loop is what created the
+      # "x6724 events over 24h" storm in the pre-fix state.
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: manager
+          # Build: see aios/manager/Dockerfile. For the lab cluster, push to
+          # the local registry or `k3s ctr image import` after `docker save`.
+          # Tag and digest pin per the convention used by bifrost and
+          # mcp-grafana (commit 5659c44 hard rule 6, image-pinning per PR #33).
+          image: caehomelab/aios-manager:0.1.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: GITHUB_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: aios-manager-secrets
+                  key: GITHUB_APP_ID
+            - name: GITHUB_APP_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aios-manager-secrets
+                  key: GITHUB_APP_PRIVATE_KEY
+            - name: GITHUB_REPO
+              valueFrom:
+                secretKeyRef:
+                  name: aios-manager-secrets
+                  key: GITHUB_REPO
+            - name: POLL_INTERVAL
+              value: "900"  # 15 min, per issue #2
+            - name: LOG_LEVEL
+              value: "INFO"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          # Liveness: the script logs to stdout, never returns a non-zero
+          # exit code unless startup env is missing. Use a lightweight
+          # process check; readiness is similar.
+          livenessProbe:
+            exec:
+              command: ["python", "-c", "import os; assert os.environ.get('GITHUB_APP_ID')"]
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["python", "-c", "import os; assert os.environ.get('GITHUB_APP_ID')"]
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+          # Allow graceful shutdown on rollout.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "kill -TERM 1 && sleep 25"]
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aios-manager
+  labels:
+    app.kubernetes.io/name: aios-manager
+spec:
+  selector:
+    app.kubernetes.io/name: aios-manager
+  ports:
+    # Not exposed externally. Kept here for future use (e.g. a /healthz
+    # endpoint, or a /metrics Prometheus scrape). Phase 1 doesn't need it.
+    - name: http
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP

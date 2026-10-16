@@ -1,0 +1,12 @@
+# aios-manager – GitHub Issues manager for AIOS
+# Namespace: ai
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ai
+resources:
+  - deployment.yaml
+  - networkpolicy.yaml
+  - infisical-secret-sync.yaml
+commonLabels:
+  app.kubernetes.io/name: aios-manager
+  app.kubernetes.io/part-of: aios
