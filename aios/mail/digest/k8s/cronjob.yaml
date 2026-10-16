@@ -1,5 +1,7 @@
-# R0 daily mail digest. 07:00 America/Chicago every day (timeZone field avoids
-# DST wobble; requires k8s >= 1.27, fine on this k3s).
+# Three fires daily (Chad, 2026-10-16): morning, midday, evening. timeZone
+# avoids DST wobble (requires k8s >= 1.27; fine on this k3s). The job reads its
+# own comments on the digest issue as a seen-ledger: 'other' tier reports once,
+# priority re-alerts while unread, and a fire with nothing new posts nothing.
 #
 # nodeSelector pins to the amd64 workers (caelx002/caelx003) because the image
 # is node-locally imported (`imagePullPolicy: Never`) and both workers carry it.
@@ -13,7 +15,7 @@ metadata:
     app.kubernetes.io/name: aios-mail-digest
     app.kubernetes.io/part-of: aios
 spec:
-  schedule: "0 7 * * *"
+  schedule: "0 5,12,17 * * *"
   timeZone: America/Chicago
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 1800
@@ -33,7 +35,7 @@ spec:
             kubernetes.io/arch: amd64
           containers:
             - name: digest
-              image: caehomelab/aios-mail-digest:0.1.3
+              image: caehomelab/aios-mail-digest:0.2.0
               imagePullPolicy: Never
               envFrom:
                 - secretRef:
@@ -47,6 +49,13 @@ spec:
                   value: "168700840"
                 - name: DIGEST_MODEL
                   value: "ollama/muse-glimmer:latest"
+                # Chad's priority tiers (editable without a rebuild; code has
+                # the same default). Comma-separated, lowercase, substring
+                # match on sender name/address + subject + preview.
+                - name: DIGEST_PRIORITY_KEYWORDS
+                  value: "bluff creek,ccha,crossbar,bearpath,flag football,cc united"
+                - name: DIGEST_SENT_TOP
+                  value: "50"
               resources:
                 requests:
                   memory: 64Mi

@@ -1,21 +1,33 @@
-# aios-mail-digest — R0 daily mailbox digest (issue #50)
+# aios-mail-digest — R0 mailbox digest, three fires/day (issue #50)
 
-Reads unread inbox via Bifrost → `graph-list-mail-messages` (read-only),
-summarizes with LOCAL `ollama/muse-glimmer` (`reasoning_effort: none`), posts
-one comment/day to [issue #50](https://github.com/ChadEngel/ce-aios/issues/50)
-via the AIOS GitHub App. Guardrails are in `digest.py`'s docstring; NetworkPolicy
-is egress-only (this job must never be called).
+Fires at **05:00, 12:00, 17:00 America/Chicago** (`timeZone`-pinned). Each run:
+unread inbox via Bifrost → `graph-list-mail-messages` (read-only) + recent
+sent-folders recipients → **two-tier digest** posted to
+[issue #50](https://github.com/ChadEngel/ce-aios/issues/50) via the AIOS
+GitHub App, summarized by LOCAL `ollama/muse-glimmer` (`reasoning_effort: none`).
+
+**Two-tier behavior (Chad's priorities, 2026-10-16):** "Priority" = mail from
+people Chad has sent email to (sent-items top-50, `DIGEST_SENT_TOP`) or
+keyword hits (`DIGEST_PRIORITY_KEYWORDS`: bluff creek, ccha, crossbar,
+bearpath, flag football, cc united — env-tunable, no rebuild). Priority bullet
+items RE-ALERT every fire while still unread (they are the someday-stay-in-
+inbox class); everything else (newsletters/marketing/junk) reports ONCE, then
+the job goes quiet: the comment footer carries a `<!--aios-tracker|YYYY-MM-DD|ids:…-->`
+ledger (sha1 of Graph message ids — their shared prefix makes truncation
+collide), the next fire reads it, and a fire with nothing new posts nothing.
+Priority items will be filed automatically only as a deliberate later decision
+(R1/R2 write-access tier).
 
 ## Deploy checklist (ordered)
 
 1. **Build the image (amd64 — workers run it):**
-   `docker buildx build --platform linux/amd64 --load -t caehomelab/aios-mail-digest:0.1.3 aios/mail/digest/`
+   `docker buildx build --platform linux/amd64 --load -t caehomelab/aios-mail-digest:0.2.0 aios/mail/digest/`
 2. **Import on BOTH amd64 workers** (k3s import is node-local; the job has no
    PVC and only `nodeSelector: kubernetes.io/arch: amd64`, so either can host it):
    ```bash
-   docker save caehomelab/aios-mail-digest:0.1.3 | \
+   docker save caehomelab/aios-mail-digest:0.2.0 | \
      ssh cengel@192.168.30.60  'sudo -n k3s ctr -n k8s.io images import -'
-   docker save caehomelab/aios-mail-digest:0.1.3 | \
+   docker save caehomelab/aios-mail-digest:0.2.0 | \
      ssh cengel@192.168.30.251 'sudo -n k3s ctr -n k8s.io images import -'
    ```
 3. **Sync + apply:** jarvis-jatg-universal-auth must exist in ns `ai` (it does),
