@@ -15,7 +15,7 @@ Status key: OPEN · BLOCKED · NEXT · PARKED · DONE?
 | N8 | Grafana pods OOMKilled (both, exit 137, 2026-10-03; limit 768Mi) — state is Postgres-backed so restarts are harmless now, but churn = noise; raise memory limit (768Mi → 1.5–2Gi, request 512Mi) | **DONE 2026-10-07** — 512Mi req / 1536Mi lim (below the 2Gi upper bound: node allocatable ~4.8Gi, 2× worst case must stay sane); applied live after lab PR #10 merge (rule-6 workflow), 2/2 running, 0 restarts, 8 dashboards intact; #34 closed |
 
 N1/N2/N6 consolidated under **#33** — CLOSED 2026-10-07 (A + image pin + enforcement); B (dashboard auth) = T6/#32 remains.
-| N4 | Commit ce-ai-home-lab working tree | **DONE** (Chad's yes, 2026-10-06): pushed 4 commits to `origin/headlamp-addition` — T4 MCP artifacts `952b21d`, user's PVC migration `5b12b38`, `grafana_noc` rename `576e269`, `udm-syslog.json` tracking `4a8c067`. Branch leads `origin/main` by 8 (Headlamp work + T4); merge to main when he's ready |
+| N4 | Commit ce-ai-home-lab working tree | **DONE** (Chad's yes, 2026-10-06): pushed 4 commits to `origin/headlamp-addition` — T4 MCP artifacts `952b21d`, user's PVC migration `5b12b38`, `grafana_noc` rename `576e269`, `udm-syslog.json` tracking `4a8c067`. **Merged to main via PR #9 (2026-10-07, 10 commits); lab repo now `main`-only** — all branches deleted; subsequent lab work shipped the same way (Bifrost pin `daa7036`, grafana limits lab PR #10 → `8a22654`) |
 | N5 | Delete orphan `GRAFANA_API_TOKEN` from Infisical (Q-T4-6) | **DONE 2026-10-07** — Chad deleted via UI (his confirmation). Machine-side verification unavailable on this build (secret-read REST routes 404 for identity tokens; CLI unauthenticated); cluster-side blast radius verified zero: never synced into any InfisicalSecret, zero manifest references, operator logs clean, `mcp-grafana-secrets` = only `GRAFANA_SERVICE_ACCOUNT_TOKEN`, grafana healthy (8 dashboards) |
 
 ## P0 — Level 2: secrets + Influx (prerequisite for every agent)
@@ -36,7 +36,7 @@ N1/N2/N6 consolidated under **#33** — CLOSED 2026-10-07 (A + image pin + enfor
 ## P1 — AI IT team
 | ID | Item | Status |
 |---|---|---|
-| A1 | Decide runtime placement (Compose on Studio vs cluster) | OPEN — confirm. **Scope shrunk by #14:** only the background agent loop needs a home; Bifrost executes tools |
+| A1 | Decide runtime placement (Compose on Studio vs cluster) | **DECIDED 2026-10-07** — in-cluster, ns `ai` (T2, #15 closed; `decisions.md`). Studio = inference provider (Ollama native/Metal) + interactive pi sessions only. Scope-shrink note stood: only the background agent loop needed a home; Bifrost executes tools |
 | A2 | Tool plane: configure Bifrost MCP clients + per-agent Virtual Keys; then prove one read-only tool end-to-end | NEXT (T4/T5). **mcpo is dead — Bifrost IS the gateway** (#14). **T4 unblocked — use `config.json`** (private-IP API path 403s without auth; config.json path does not) |
 | A6 | Harden: enable Bifrost dashboard auth + `enforce_auth_on_inference` | **Optional hardening (T6), not a prerequisite.** Closes the tool-execution auth hole. Downgraded from blocker 2026-10-04 |
 | A3 | Orchestrator model bake-off (multi-tool reliability) | OPEN |
@@ -63,7 +63,7 @@ Lauren AI-literacy workspace (build for one kid first; not a business yet) · We
 1. Approve HA scope exception (192.168.250.168:8123/:8300, read-only first)? 
 2. ~~Which M365 tenant~~ ANSWERED: personal `engelmn.com` (M365 Business Premium + Teams).
 3. Were the HA token / deploy key / Infisical client secret / UDM psk rotated?
-4. Confirm agent runtime placement: Docker Compose on the Mac Studio (leaning) vs in-cluster.
+4. ~~Confirm agent runtime placement~~ **ANSWERED 2026-10-07** — in-cluster ns `ai` (T2, #15 closed, `decisions.md`).
 5. What is "Azure Plan 2" — an Azure subscription (needed for Azure Bot), or Entra ID P2? Is there an active subscription?
 6. Which mailbox should the helpdesk agent work on — your primary, or a dedicated one (safer)?
 7. Scheduler: which calendar(s) — personal only, or family/shared too? Propose changes (R1) from day one or read-only trial?
