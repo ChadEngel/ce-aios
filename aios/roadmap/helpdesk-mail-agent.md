@@ -1,171 +1,85 @@
-# H5 / hire #4 — Helpdesk mail agent (design for review)
+# H5 / hire #4 — Helpdesk mail agent (design, spike-resolved)
 
-**Status:** R1 proposal — nothing applied, nothing registered, no secrets written.
-**Related:** #21 (Entra registration gate, `status:waiting-on-chad`), `ai-it-team.md` (roster + M365 guidance), `manager-agent.md` (digest pattern), `decisions.md` 2026-10-07 (T2 in-cluster runtime), 2026-10-11 (jarvis-jatg agent-creds boundary).
+**Status:** T-M1 spike **PASS** (2026-10-16) — architecture revised; mailbox decision **resolved** (primary, Chad 2026-10-16).
+**Related:** #21 (was the Entra-registration gate — now shrunk to an optional R2 hardening item), `ai-it-team.md` (roster), `decisions.md` 2026-10-16 entries (mailbox=primary; Softeria adopted).
 
-Chad reprioritized 2026-10-11: mailbox agent **next** (ahead of patch/facilities in the original order). Honest note: this does not block or depend on NOC/patch — its prerequisites (Entra app + mailbox choice + Infisical layout) are independent, so the reorder is defensible without leaving a half-finished hire behind. NOC's tool plane is live; NOC-as-standing-agent still owes its 2-week R0 window.
+Chad's 2026-10-16 direction: **promote to primary now, get it set up, start slow.** Concretely: v1 = one daily digest + on-demand reads, nothing else; tier gates unchanged.
 
-## Scope (v1)
+## Spike result (T-M1, evaluated 2026-10-16 against Softeria/ms-365-mcp-server @ main)
 
-Mail triage, **read-only (R0)**.
+Central question was app-only daemon auth. **Answer: it doesn't exist** — no client-credentials flow in the codebase (only interactive / device-code / silent / OBO). BUT the spike found a daemon-viable mode that *removes Chad's Entra work entirely*:
 
-- **In v1:** unread/needs-action digest, inbox counts, search/retrieval (metadata + body on demand), category inventory. One recurring digest.
-- **Out of scope v1:** Mail.Send (never for v1, decide later entirely), delete (never), Teams two-way (that's the other half of hire #4 — later, needs Azure Bot + tunnel decision), auto-categorize (R2-class, later).
-- **Rides along:** scheduler agent (PA1, #27) shares the Entra/graph infrastructure — if Chad does the registration session once, `aios-calendar` can be created in the same sitting (separate registration, separate identity, per the one-app-per-agent rule).
+| Spike finding | Verdict |
+|---|---|
+| `--http` streamable HTTP transport, default `:3000` | PASS — Bifrost-reachable |
+| `--trust-proxy-auth` (HTTP): skips bearer check; **all callers share the server's cached MSAL login** | PASS — daemon-viable; auth boundary moves to NetworkPolicy + Bifrost VK |
+| `--read-only`: blocks non-GET Graph calls at the call layer + filters tools lacking `readOnlyHint` | PASS — R0 enforced in-server, not just at VK |
+| `--enabled-tools` + `--allowed-scopes` + `--expected-username` | PASS — surface/identity pinning available |
+| App-only (client credentials + cert) support | **FAIL** — absent; revisit only if a write-tier ever needs it (see R2 note) |
+| Token cache at rest | Encrypted envelope; key supplied via env (`MS365_MCP_SECRET_KEY`) — becomes an Infisical secret. Exact env name to confirm at deploy |
 
-## Architecture
+## Architecture (revised)
 
-**Chosen:** Graph MCP **server** in-cluster (ns `ai`), registered as a Bifrost MCP client, VK `aios-helpdesk` scoped to read tools only. The agent loop dispatches through Bifrost like every other hire.
+Identical topology to the original design; the identity model changed:
 
-Why this shape (consistency with five recorded decisions rather than novelty):
-1. **Bifrost is the tool plane** (spike #14) — tools belong on `/mcp/*`
-behind per-agent Virtual Keys, not inside bespoke service code.
-2. **Per-agent least privilege is native** — `aios-helpdesk` VK +
-`tools_to_execute` read-only list = R0 enforced at the gateway.
-3. **One secret path** (operator sync, `jarvis-jatg` source) and **one
-observability path** (tool calls → Loki).
-4. Reusable: once `graph` exists as a client, the scheduler (calendar
-read) and later Teams work reuse it — a second integration rides the
-same endpoint.
+```
+[Bifrost /mcp/graph] --(cluster-internal, auth:none)--> [ms-365-mcp-server, ns ai]
+        |                                                      |
+        |--- VK aios-helpdesk (read-only execute list)         |--- one-time device-code login by Chad
+        |--- NetworkPolicy: only bifrost:8000 may call         |--- encrypted token cache on PVC
+```
 
-Rejected alternatives:
-- **Graph calls inside `aios-manager` code** (like its GitHub logic) —
-couples mail to the manager binary, bypasses VK-scoping/audit,
-duplicates Graph auth handling. Not reusable by the scheduler.
-- **GitHub Actions / external cron** — violates Infisical-only rule
-(LLM key needed) and Bifrost is LAN-only.
-- **Personal PAT-style delegation by reusing Chad's own mailbox token** —
-violates least-privilege/revocable-identity guardrail outright.
+- **Server:** `Softeria/ms-365-mcp-server` (npm `@softeria/ms-365-mcp-server`, active, ★1049) packaged in a minimal container, ns `ai`, port 3000, NetworkPolicy = only Bifrost ingress, no egress beyond Graph (`graph.microsoft.com`, `login.microsoftonline.com`).
+- **Identity:** Chad logs in **once** via device code (`--login`) as his primary account; `--expected-username <upn>` pins it. Refresh-token cache persists on a small PVC (encrypted with an Infisical-held key).
+- **R0 hardening flags at boot:** `--http :3000 --trust-proxy-auth --read-only --expected-username <chad-upn> --enabled-tools <mail-read-tool-list>` (exact tool names confirmed from `tools/list` at deploy; list to include only unread-list/search/get-metadata/get-body/count-style reads).
+- **Bifrost:** MCP client `graph` (`auth: none`, internal endpoint), VK `aios-helpdesk`, `tools_to_execute` = same read list, `tools_to_auto_execute: []`. Client name has **no hyphens** (session-5 trap); endpoint slug re-hyphenates.
+- **Digest loop (v1):** k8s CronJob calling VK `aios-helpdesk` (same pattern as the NOC digest), model pinned to **`muse-glimmer`** (Chad's pick, 2026-10-16). Later moves under `aios-manager` when hired. Digest lands on a dedicated issue thread in `ce-aios`.
+- **muse-glimmer verified 2026-10-16** (via `aiserver.home:11434` — the inference Studio, M3 Ultra 96GB @ 192.168.30.10; NOT the desk Studio): 18.2 GB. It is a **reasoning model** — without `think:false` the eval budget burns entirely on hidden `thinking` (empty visible content). With `think:false`: correct 2-of-5 triage pick on a 5-subject digest task, ~300 tok in 9.7 s. **RESOLVED 2026-10-16 (through-Bifrost end-to-end):** `ollama/muse-glimmer:latest` already registered (VK-gated `/v1/models` shows it; 11 models); Bifrost v2.2.6 maps OpenAI-compat `reasoning_effort` → ollama think-level: `"none"` = 0 reasoning chars, 165 completion tok, triage correct (vs 766 tok plain); `"low"` ≈ 868 chars of thinking remains; prompt-level `/no_think` suffix is **not honored** by this model's template. Digest calls pin `reasoning_effort: "none"`.
+- Routing stays **local-first** (context.md §6): mail content must not reach a frontier provider by default; `muse-glimmer` is the VK default model.
 
-## Identity & auth (Chad does this — one sitting)
+## What the spike removed (vs original design)
 
-Per the app-registration register in `ai-it-team.md`:
+1. **No Entra app registration for v1.** #21's `aios-helpdesk-mail` registration deferred — becomes optional hardening.
+2. **No cert/PEM, no `GRAPH_*` secrets, no `ApplicationAccessPolicy`.** Delegated scope means the token IS Chad's identity reading his own mailbox — the blast radius is narrower by construction than tenant-wide app perms + RBAC fence.
+3. **Infisical layout shrinks to one secret:** `MS365_MCP_SECRET_KEY` (32 bytes, cache encryption) in **jarvis-jatg** (agent-creds boundary rule, 2026-10-11) + non-secret `MS365_MCP_*` config vars. Synced via the existing `jarvis-jatg-universal-auth` credential from PR #44's deploy — no second credential.
 
-1. **App:** single-tenant Entra registration `aios-helpdesk-mail`.
-2. **Credential:** certificate (self-signed, upload `.cer`). No client
-secret unless cert flow fails — secret only if needed, 90-day expiry,
-Infisical-held. Record choice + expiry in #21 when done.
-3. **API permission:** `Mail.Read` (application) for R0. **Not**
-`Mail.ReadWrite` yet — add it only when a write action is promoted (R2
-gate). App-only mail permissions are tenant-wide *by default* — the RBAC
-step below is not optional.
-4. **Tenancy scope (mandatory):** Exchange Online `ApplicationAccessPolicy`
-restricting the app to a mail-enabled security group containing exactly
-the target mailbox. PowerShell:
-   `New-ApplicationAccessPolicy -AppId <appId> -PolicyScopeGroupId <grp> -AccessRight RestrictAccess` +
-   `Test-ApplicationAccessPolicy` on a mailbox outside the group (expect
-   failure) and inside (expect success). **Verify current Microsoft
-   guidance at build time** (UNCONFIRMED from this doc — flags per rule 4).
-5. **Admin consent:** Chad grants once. Sign-in/audit logs reviewed at the
-   2-week R0 gate.
+## What the spike added (new failure modes / notes)
 
-**Mailbox choice (gating question, #21):** recommendation = a **dedicated
-mailbox** (e.g. `aios-mailbox@engelmn.com`). Blast-radius: policy group
-contains one mailbox, not Chad's primary; nothing personal leaks into
-agent context; kill = delete registration. Tradeoff: mail must be
-*deliberately routed* to it (rules/forwarding), so the agent's value is
-bounded by what the mailbox receives. Operating on the primary inbox is
-possible but exposes personal PII to model context from day one.
+1. **Acts-as-Chad identity.** Graph calls carry Chad's delegated identity, not a service identity. Acceptable for **read-only** (and honest: it can only read what Chad can read). **Trigger point:** if any write tier (R2: move/categorize) is ever promoted, acting as-user is scarier than acting as-scoped-app — at that gate, build the app-only path (own registration, `Mail.ReadWrite` application, RBAC fence, cert) per the original design, kept in this file as a rollback target, or reject the write tier.
+2. **Refresh-token staleness.** Delegated refresh tokens die on inactivity (~90d), CA policies, or password change — a silent-outage class. Mitigations: daily digest keeps the token warm; `--verify-login` in the CronJob's health step; a failed-refresh event lands in Loki as the loud signal. Cert-expiry silent outage from the original design is gone; this replaces it as the watch item.
+3. **The token cache is a credential at rest.** Encrypted, but treat the PVC like a secret store: no arbitrary pods in ns `ai` get read access (default-deny ingress/egress for the server pod per NetworkPolicy; PVC limited to the server).
+4. **Scope breadth.** Softeria's default app asks for its fixed, broader-than-mail scopes (`--list-permissions` to enumerate at deploy). Least-privilege hardening = BYO minimal-scope delegated app (`Mail.Read`, `User.Read`) later — a registration task Chad can batch with the scheduler's `aios-calendar` sitting (#27). Not required for R0.
 
-## Infisical layout (jarvis-jatg — per the 2026-10-11 boundary rule)
-
-Secrets at the **root path** of `jarvis-jatg/prod` (hyphen-free paths are
-an operator-template requirement — issue #43 trap):
-
-| Key | Content | Source |
-|---|---|---|
-| `GRAPH_TENANT_ID` | tenant UUID | Chad (Entra portal) |
-| `GRAPH_CLIENT_ID` | app UUID | Chad |
-| `GRAPH_PRIVATE_KEY_PEM` | cert private key (PEM) | generated at creation |
-| `GRAPH_CERT_THUMBPRINT` | hex thumbprint | Entra portal |
-| `GRAPH_MAILBOX_UPN` | target mailbox | Chad's mailbox decision |
-| `GRAPH_BASE_URL` | `https://graph.microsoft.com/v1.0` (test override possible) | this doc |
-
-K8s: `InfisicalSecret` `aios-helpdesk-secrets-sync` → `aios-helpdesk-secrets`
-in ns `ai`, referencing a `jarvis-jatg-universal-auth` credential — **the
-same one** being created for `aios-manager` (PR #44 step 1) — no second
-credential needed. Rotation: cert at 12 months, renewal runbook note in
-this file at build time.
-
-## MCP server — spike first (T-M1, follows the #14 pattern)
-
-Community candidates (checked 2026-10-11; stars + last push from GitHub):
-
-| Candidate | Stars | Last push | Notes |
-|---|---|---|---|
-| `Softeria/ms-365-mcp-server` | 1049 | 2026-10-15 (active) | **HTTP/streamable transport + Open WebUI integration documented.** Auth model is user-delegation OAuth (BYO app registration via `MS365_MCP_CLIENT_ID/SECRET`, device-code/OBO flows). **App-only client-credentials support UNCONFIRMED — this is the spike's central question.** Also verify the tool surface can be filtered to read-only mail. |
-| `ryaker/outlook-mcp` | 445 | 2026-03-30 (stale) | Mail-focused; stdio; stale 6 months — pass unless spike #1 fails |
-| `tecnologicachile/mail-mcp` | 103 | active | Rust, multi-protocol IMAP/SMTP/EWS/Graph; SMTP surface = unwanted send capability for v1 |
-| Fallback: **build minimal** | — | — | FastMCP (Python) ~150 LOC: `mail_list_unread`, `mail_search`, `mail_get_metadata`, `mail_get_body`, `mail_count_by_category`; app-only cert auth exactly as designed above |
-
-**Spike pass criteria (all four):** (a) unattended app-only auth (cert) —
-no interactive login anywhere in the boot path; (b) HTTP/streamable
-transport reachable from Bifrost's container; (c) tool surface restricts
-to reads; (d) no plaintext secret beyond what Infisical injects. If (a)
-fails on every candidate → build minimal (it's small and exactly-scoped;
-that's not the mcpo mistake — mcpo duplicated an existing capability,
-this fills a verified hole).
-
-Deployment: ns `ai`, container, NetworkPolicy allowing only bifrost:8000
-inbound-style traffic (mirror `mcp-grafana`'s policy), VK `aios-helpdesk`
-with `tools_to_execute` = the read list, `tools_to_auto_execute: []`.
-**MCP client name: `graph`** — client names forbid hyphens (session-5
-trap: `grafana-noc` failed); endpoint slug re-hyphenates to
-`/mcp/graph`.
-
-## Tier plan (mirrors the roster's gate)
+## Tier plan (unchanged gates)
 
 | Tier | What | Config |
 |---|---|---|
-| R0 (start) | digest + read/search only | `Mail.Read`, VK execute-list = 5 read tools |
-| R1 | propose rules: categories, flags, folder targets (as diffs in the digest) | no permission change needed — still read-only compute |
-| R2 | apply ONE action type at a time: first `move to folder`, then `categorize` | add `Mail.ReadWrite` to the app + RBAC re-check + explicit per-action confirm |
-| Never | send, delete, Teams outbound as "mail" | out of scope / separate design |
+| R0 (start — "slow", per Chad) | Daily digest + 4-5 read tools on demand | `--read-only` + VK execute-list, `Mail.Read`-equivalent delegated scope |
+| R1 | Propose triage rules as diffs in the digest | no config change — read-only compute |
+| R2 (decision gate, not scheduled) | one action at a time (move/categorize) | **re-evaluate identity first** (see failure-mode 1) |
+| Never | send, delete | out of scope |
 
-**"Hired" bar (from `ai-it-team.md`):** 2 weeks R0 with logged calls
-reviewed by Chad + written failure-mode list, then one action at a time.
+**Digest spec (v1 deliverable, daily):** unread count, needs-reply heuristic (last thread message from another party), category breakdown, top-5 aged unread, timestamps on everything. Log-PII rule holds: ids + truncated subjects in Loki, **never bodies or recipient addresses**; bodies reach model context only on explicit single-message reads.
 
-## The v1 deliverable: digest
+## Failure modes (seed the R0 two-week gate)
 
-Recurring (cadence TBD — recommendation: daily at a fixed time):
-unread count, messages where the last thread message is from another
-party (needs-reply heuristic), today's categories breakdown, top-5 aged
-unread. Delivery: comment on a dedicated digest issue in `ce-aios`
-(auditable, matches the manager pattern). Pushover/Teams delivery = later
-(reuse `pushover-bridge` if Chad prefers push immediately).
-
-## Failure modes (seed the R0 gate's list)
-
-1. **Prompt injection via mail body** — email content is untrusted data,
-   never instructions (operating-rules guardrail). Body fetched on demand
-   only; never auto-fed to the model in bulk.
-2. **Scope creep of app perms** — tenant-wide by default; the RBAC policy
-   is the real control. `Test-ApplicationAccessPolicy` results recorded
-   in #21 at creation.
-3. **Log PII** — Loki logs carry ids/subjects-truncated, **never bodies**
-   or recipient addresses.
-4. **Graph throttling** — 429 backoff; digest is a single bounded batch,
-   not a stream.
-5. **Stale digest read as current state** — timestamps in every digest.
-6. **Cert expiry (12mo) = silent outage** — renewal note + Loki probe
-   (start-up failure event) makes it loud, not silent.
-
-## Open questions (Chad — #21)
-
-1. **Mailbox:** dedicated `aios-mailbox@engelmn.com` (recommended) vs
-   operating on the primary personal inbox?
-2. Digest cadence + surface: daily-to-issue-comment vs push via
-   pushover-bridge vs both?
-3. Do the scheduler's `aios-calendar` registration in the same Entra
-   sitting? (#27) — recommended, one consent session.
+1. Prompt injection via mail body — content is untrusted data, never instructions (operating-rules guardrail); bulk body ingestion avoided.
+2. Refresh-token staleness (watch item above).
+3. VK scope creep — execute-list changes require an issue + decision note.
+4. Graph 429s — bounded single-batch digest, backoff; not a stream.
+5. Stale digest read as current state — timestamps mandatory.
+6. Bifrost/auth drift — the `--trust-proxy-auth` mode trusts the network boundary; if NetworkPolicy ever opens beyond Bifrost, the mailbox rides the opening. Review the policy in the R0 gate.
 
 ## Rollout
 
-| Step | Who | Gate |
+| Step | Who | Gate / note |
 |---|---|---|
-| T-M1 spike: pick/build MCP server | assistant (branch PR) | pass criteria above |
-| Entra registration + cert + RBAC + consent | **Chad** (#21) | mailbox choice answered |
-| Cert + secret keys into `jarvis-jatg` | Chad (UI, clipboard, never chat) | registration done |
-| Deploy server (ns ai) + Bifrost client + VK | assistant | PR #44's `jarvis-jatg-universal-auth` exists first (shared prereq) |
-| T-M2: one read tool call end-to-end (T5 pattern) | assistant | proof logged to issue |
-| R0 digest, 2 weeks | agent | Chad reviews logs → "hired" decision |
+| Container build + deploy manifests (deployment/pvc/networkpolicy/service, ns ai) | assistant (PR) | after PR #44's `jarvis-jatg-universal-auth` exists (shared prereq) |
+| Image import to k3s + apply | assistant (SSH path verified session 7) | manifests merged |
+| Bifrost: dashboard admin bootstrap (setup token) + VK `aios-helpdesk` | **Chad** (#32 T6; model entry done — `muse-glimmer:latest` confirmed in registry 2026-10-16) | the remaining Bifrost-side step |
+| Bifrost MCP client `graph` | assistant (lab repo, branch+PR) | server reachable |
+| One-time device-code login (`--login`, `--expected-username`) | **Chad** (~5 min, from laptop/lounge; URL+code) | only human step in the mail chain |
+| T-M2: one tool call end-to-end (T5 pattern) | assistant | proof logged |
+| Daily digest, 2-week R0 | agent | Chad reviews logs → "hired" decision |
+
+**Still pending before ANY in-cluster deploy (both manager and mail):** Chad's universal-auth credential step from PR #44 (`jarvis-jatg` identity → UI → clientId/secret → `kubectl -n ai create secret generic jarvis-jatg-universal-auth ...`).
