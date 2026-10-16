@@ -154,3 +154,16 @@
 - `git branch --merged|--no-merged origin/main` covers LOCAL branches only; verify remote merge-state with `-r` or `rev-list --count origin/main..origin/<branch>`.
 - `client` section in config.json + `source_of_truth: split` = file force-wins on boot (enforcement flag can be reverted by accident — CM header documents it).
 - Reusable: `/tmp/bifrost-src` = full v2.2.6 source clone (public repo); `/tmp/bf` = earlier sparse extract; `/tmp/t5probe.sh` clean (no embedded VK); aios-noc VK material recovers from `governance_virtual_keys` in a fresh config.db copy.
+
+## Session 9 (2026-10-16) — helpdesk mail spike PASS; muse-glimmer verified; Bifrost bootstrap unblocked
+1. **Merged:** #41, #42, #44, #45 (drift reconcile), #46 (mail design). Opened #47 (spike verdict + decisions).
+2. **T-M1 spike PASS** — Softeria/ms-365-mcp-server adopted in HTTP daemon mode (`--http --trust-proxy-auth --read-only`; NO app-only auth exists in it). Entra registration/cert/RBAC chain dissolved for R0 → #21 commented, `waiting-on-chad` → `in-progress`; registration deferred as optional R2 hardening. Infisical shrinks to one secret (`MS365_MCP_SECRET_KEY`, jarvis-jatg).
+3. **Chad decisions recorded** (`decisions.md`): mailbox = primary inbox now, "start slow" (daily digest only, read-only); delegated identity accepted with R2 re-evaluation gate; backfilled 2026-10-11 jarvis-jatg boundary entry (agent creds vs infra creds).
+4. **muse-glimmer verified** (Chad's routing pick for the digest): lives on `aiserver.home:11434` = aibeasts-mac-studio M3 Ultra 96GB @ 192.168.30.10 — the INFERENCE Studio, distinct from desk `chad-studio.home` (client). It is a **reasoning model**: without `think:false` the eval budget burns on hidden `thinking` → empty visible content. With `think:false`: correct 2-of-5 triage, 300 tok ≈ 9.7 s. Pinned as the digest default model on the future `aios-helpdesk` VK; DEPLOY-TIME VERIFY: `think:false` pass-through via Bifrost's ollama provider.
+5. **Bifrost setup-token bootstrap unblocked** — dashboard's token prompt is T6's human half (#32): admin creation while `BIFROST_SETUP_TOKEN` gates the management `/api`. Extracted from `bifrost-secrets` (b64→plain) → `~/.ai-runner/bifrost-setup-token` (chmod 600, 64-hex verified, never logged).
+6. **SSH recipe confirmed working:** `ssh util-server` (alias, user `cengel` @ 192.168.30.217) — manual `chad@IP` attempts fail; always use the alias.
+
+**New traps (session 9):**
+- Reasoning-capable Ollama models: empty `message.content` ≠ broken model — check `message.thinking` length and burn rate (`eval_count`) before verdicts; set `think:false` for R0-class tasks.
+- Bifrost provider/model registry lives in **config.db** (split source-of-truth) — the git-tracked `bifrost-config` CM carries only `$schema`/`mcp`/`governance`; read live state via setup-token `/api`, not the CM.
+- When probing hosts by name, resolve FIRST (`dscacheutil -q host`): `aiserver.home` (.30.10) and `chad-studio.home` are different Mac Studios — assuming "Ollama is local here" from context alone burned time.

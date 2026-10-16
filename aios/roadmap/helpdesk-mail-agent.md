@@ -33,7 +33,9 @@ Identical topology to the original design; the identity model changed:
 - **Identity:** Chad logs in **once** via device code (`--login`) as his primary account; `--expected-username <upn>` pins it. Refresh-token cache persists on a small PVC (encrypted with an Infisical-held key).
 - **R0 hardening flags at boot:** `--http :3000 --trust-proxy-auth --read-only --expected-username <chad-upn> --enabled-tools <mail-read-tool-list>` (exact tool names confirmed from `tools/list` at deploy; list to include only unread-list/search/get-metadata/get-body/count-style reads).
 - **Bifrost:** MCP client `graph` (`auth: none`, internal endpoint), VK `aios-helpdesk`, `tools_to_execute` = same read list, `tools_to_auto_execute: []`. Client name has **no hyphens** (session-5 trap); endpoint slug re-hyphenates.
-- **Digest loop (v1):** k8s CronJob calling the VK (same pattern as the NOC digest), routed through **local Ollama models via Bifrost** — mail content must not reach a frontier provider by default (context.md §6 routing rule). Later moves under `aios-manager` when hired. Digest lands on a dedicated issue thread in `ce-aios`.
+- **Digest loop (v1):** k8s CronJob calling VK `aios-helpdesk` (same pattern as the NOC digest), model pinned to **`muse-glimmer`** (Chad's pick, 2026-10-16). Later moves under `aios-manager` when hired. Digest lands on a dedicated issue thread in `ce-aios`.
+- **muse-glimmer verified 2026-10-16** (via `aiserver.home:11434` — the inference Studio, M3 Ultra 96GB @ 192.168.30.10; NOT the desk Studio): 18.2 GB. It is a **reasoning model** — without `think:false` the eval budget burns entirely on hidden `thinking` (empty visible content). With `think:false`: correct 2-of-5 triage pick on a 5-subject digest task, ~300 tok in 9.7 s. **DEPLOY-TIME VERIFY:** confirm `think:false` passes through Bifrost's ollama provider (OpenAI-compat param mapping in v2.2.6); fallback = larger `num_predict` + brevity instruction (slower, thinking tax) — ~10 s/call is fine for a daily batch either way.
+- Routing stays **local-first** (context.md §6): mail content must not reach a frontier provider by default; `muse-glimmer` is the VK default model.
 
 ## What the spike removed (vs original design)
 
@@ -74,7 +76,8 @@ Identical topology to the original design; the identity model changed:
 |---|---|---|
 | Container build + deploy manifests (deployment/pvc/networkpolicy/service, ns ai) | assistant (PR) | after PR #44's `jarvis-jatg-universal-auth` exists (shared prereq) |
 | Image import to k3s + apply | assistant (SSH path verified session 7) | manifests merged |
-| Bifrost client `graph` + VK `aios-helpdesk` | assistant (lab repo, branch+PR) | server reachable |
+| Bifrost: model entry `muse-glimmer` (ollama provider) + dashboard admin bootstrap (setup token) + VK `aios-helpdesk` | **Chad** (dashboard; `~/.ai-runner/bifrost-setup-token`, #32 T6) | admin exists → normal dashboard path |
+| Bifrost MCP client `graph` | assistant (lab repo, branch+PR) | server reachable |
 | One-time device-code login (`--login`, `--expected-username`) | **Chad** (~5 min, from laptop/lounge; URL+code) | only human step in the mail chain |
 | T-M2: one tool call end-to-end (T5 pattern) | assistant | proof logged |
 | Daily digest, 2-week R0 | agent | Chad reviews logs → "hired" decision |
