@@ -21,25 +21,46 @@ cache lives on the `aios-mail-cache` PVC.
 3. **Apply:** `kubectl apply -k aios/mail/k8s/` — wait for
    `kubectl -n ai rollout status deploy/aios-mail-mcp`.
 4. **ONE human step — device-code login** (Chad, ~5 min):
-   `kubectl -n ai exec deploy/aios-mail-mcp -- ms-365-mcp-server --login --verify-login`
-   Follow the URL + code in the browser, confirm verify passes, then
-   `kubectl -n ai rollout restart deploy/aios-mail-mcp` so the server picks
-   up the fresh cache.
-5. **Bifrost side:** MCP client `graph` registration lives in the LAB repo
-   (`ce-ai-home-lab`, PR — `clusters/util-server/applications/bifrost/
-   kustomization.yaml`). The `aios-helpdesk` VK grant of the graph client is
-   done in the Bifrost **dashboard** (Chad) — the VK already exists there;
-   do NOT redeclare it in the git ConfigMap (split-merge overwrite risk).
-   Copy the VK key value into Infisical `jarvis-jatg` as
-   `BIFROST_VK_AIOS_HELPDESK` (UI, never chat) for the digest job.
-6. **T-M2 proof:** from the bifrost pod, POST initialize + `tools/list` to
-   `http://aios-mail-mcp.ai:3000/mcp` — enumerate the readOnly tools, then
-   add `--enabled-tools` (tighten to the exact read list) + optionally
-   `--expected-username <upn>` to the Dockerfile ENTRYPOINT in a small PR.
-   Record the proof on issue #21.
+   `kubectl -n ai exec -it deploy/aios-mail-mcp -- ms-365-mcp-server --login --read-only`
+   then `kubectl -n ai rollout restart deploy/aios-mail-mcp`.
+   **The `--read-only` flag is load-bearing:** the login process caches an
+   MSAL grant under the requested scopes; the server acquires refreshes with
+   the read-only scope subset. Log in WITHOUT the flag (or with --verify-login,
+   a second MSAL consumer) and every refresh after the first access-token
+   expiry (~1h) dies with "Failed to acquire token". Scope match or death.
+   (Upstream #522 diagnosed the same symptom class; our variant = scope
+   mismatch between login and daemon.) Verify by a real tool call through
+   Bifrost, never a second --verify-login process.
+5. **Bifrost side (all in the LAB repo, merged PRs #11/#12):** the `graph`
+   MCP client is file-declared (in-memory only — it never appears in
+   config_mcp_clients), and file-declared clients can ONLY be granted to a
+   VK via the file governance section (aios-noc pattern). The aios-helpdesk
+   VK block lives there; its key value is deliberately absent from git
+   (value-less declaration preserves the dashboard-issued key).
+   The key is in Infisical `jarvis-jatg` as `BIFROST_VK_AIOS_HELPDESK`.
+   NOTE: the lab repo merges are NOT live until `kubectl apply -f` the
+   kustomization + `rollout restart deploy/bifrost` (merge ≠ apply).
+6. **T-M2 proof (PASSED 2026-10-16):** initialize + tools/list through
+   llm.caehomelab.com/mcp/graph with the VK → 75 tools, namespaced
+   `graph-<tool>` (e.g. `graph-list-mail-messages` — the digest job MUST use
+   namespaced names). get-my-profile + list-mail-messages returned real
+   Identity/Inbox data. Remaining: tighten `--enabled-tools` to the R0 mail
+   subset in a small PR.
 
 ## Verify it is up
 
 `kubectl -n ai get pods -l app=aios-mail-mcp` (Running), then from the bifrost
 pod: `wget -qO- http://aios-mail-mcp.ai.svc.cluster.local:3000/ --server-response`
 — TCP reaching the port is the signal (route checks can 200+HTML).
+
+## Image arch note (multi-node cluster)
+
+The cluster is MIXED-ARCH: caelx002/caelx003 are amd64, util-server (control-
+plane) is arm64. The pod lands where the local-path PVC binds; import the image
+matching THAT node's arch under the same tag:
+
+- amd64 (caelx002/caelx003): `docker buildx build --platform linux/amd64 --load \
+  -t caehomelab/aios-mail-mcp:0.1.0 aios/mail/` then `docker save \
+  | ssh cengel@<node-ip> 'sudo -n k3s ctr -n k8s.io images import -'`
+- arm64 (util-server): plain `docker build`, `ssh util-server`, same import
+- Both nodes are `cengel@` + passwordless sudo (`sudo -n k3s ctr ...`)
