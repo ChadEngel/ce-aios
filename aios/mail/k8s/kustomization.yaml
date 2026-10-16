@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# aios-mail-mcp — Graph MCP server for the helpdesk mail agent (hire #4, R0).
+# Apply with: kubectl apply -k aios/mail/k8s/   (namespace `ai` must exist)
+#
+# PREREQ (shared with aios-manager): jarvis-jatg-universal-auth Secret in
+# ns `ai` — the operator syncs agent project creds; this service itself
+# needs NO synced secrets (login cache is container-internal on the PVC),
+# but the namespace-wide credential is the deploy gate recorded in #43/#44.
+
+resources:
+  - deployment.yaml
+  - service.yaml      # Service + PVC
+  - networkpolicy.yaml
+
+labels:
+  - includeSelectors: false
+    includeTemplates: true
+    pairs:
+      area: ai-team
+      app.kubernetes.io/part-of: aios
