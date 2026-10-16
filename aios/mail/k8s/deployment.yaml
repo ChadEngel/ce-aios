@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aios-mail-mcp
+  namespace: ai
+  labels:
+    app: aios-mail-mcp
+    caehomelab.com/log-source: aios
+spec:
+  replicas: 1
+  # Single replica holding the device-code login cache on an RWO PVC.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: aios-mail-mcp
+  template:
+    metadata:
+      labels:
+        app: aios-mail-mcp
+        caehomelab.com/log-source: aios
+    spec:
+      containers:
+        - name: server
+          # Built locally (aios/mail/Dockerfile) and imported via k3s ctr;
+          # never pulled from a registry.
+          image: caehomelab/aios-mail-mcp:0.1.0
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 3000
+              name: http
+          # TCP probes: the HTTP surface is a streamable-MCP endpoint
+          # (route checks return 200+HTML on unknown paths — Bifrost trap;
+          # TCP is the honest liveness signal here).
+          startupProbe:
+            tcpSocket:
+              port: 3000
+            periodSeconds: 5
+            failureThreshold: 12
+          readinessProbe:
+            tcpSocket:
+              port: 3000
+            periodSeconds: 15
+            timeoutSeconds: 3
+          livenessProbe:
+            tcpSocket:
+              port: 3000
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: cache
+              mountPath: /home/node/.config
+      volumes:
+        - name: cache
+          persistentVolumeClaim:
+            claimName: aios-mail-cache
