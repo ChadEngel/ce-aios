@@ -1,6 +1,6 @@
 # AIOS — Chad Engel Context File
 
-Last updated: 2026-10-07 (rev 5: Bifrost hardened + pinned; T2 decided in-cluster; git rule 6 branch-only workflow)
+Last updated: 2026-10-11 (rev 7: In-cluster aios-manager deploy unblockers fixed in PR #44; creds live in jarvis-jatg per agent-vs-infra boundary rule; 3 gaps from #43 resolved — operator template hyphens, project scope, real service code; bonus: NetworkPolicy egress lockdown)
 Purpose: portable memory for any assistant (Claude, or a local model through Bifrost) working with Chad. Plain markdown, no vendor-specific syntax — paste into Claude Project instructions/knowledge, or an Open WebUI system prompt / knowledge base.
 
 ---
