@@ -226,8 +226,11 @@ def classify(messages, sent_contacts):
         addr = (frm.get("address") or "").lower()
         name = m.get("from", {}).get("emailAddress", {}).get("name") or ""
         subject = m.get("subject") or ""
-        blob = " ".join([name.lower(), addr, subject.lower(),
-                         (m.get("bodyPreview") or "")]).lower()
+        # Design rule (README/aios-roadmap): keyword matching uses subject +
+        # sender only. bodyPreview would self-reference the bot's own posted
+        # digests (GitHub notification emails quote them) and re-promote them
+        # to Priority forever — a feedback loop. Never match on body text.
+        blob = " ".join([name.lower(), addr, subject.lower()])
         reason = None
         if sent_contacts and addr in sent_contacts:
             reason = "you email this person"
@@ -296,27 +299,41 @@ def clear_filed():
     """Chad's retention rule: AIOS-Filed empties itself after FILED_DAYS.
     Deletes are constrained to the folder-scoped listing of THAT folder and
     age-filtered inside the Graph query. Graph DELETE = soft delete (the
-    message lands in Deleted Items, further recoverable) — never a purge."""
+    message lands in Deleted Items, further recoverable) — never a purge.
+    Clears in bounded batches so a large backlog can't blow the MCP timeout."""
     filed_id = folder_map().get(FILED_FOLDER.lower())
     if not filed_id:
         log(f"retention: {FILED_FOLDER} does not exist yet — nothing to clear")
         return 0
     cutoff = (local_now() - timedelta(days=FILED_DAYS)).strftime(
         "%Y-%m-%dT%H:%M:00Z")
-    data = graph_file("list-mail-folder-messages",
-                      {"mailFolderId": filed_id,
-                       "filter": f"receivedDateTime lt {cutoff}",
-                       "top": 50, "fetchAllPages": True})
-    items = data.get("value") if isinstance(data, dict) else data
-    n = 0
-    for m in items or []:
-        if not m.get("id"):
-            continue
-        graph_file("delete-mail-message", {"messageId": m["id"]})
-        n += 1
-    log(f"retention: cleared {n} items older than {FILED_DAYS}d from "
+    # Bounded page-1 loop, never a merged fetchAllPages crawl: once the folder
+    # holds thousands of aged items (e.g. after a bulk cleanup), a merged
+    # listing blows the 30s MCP timeout and the fire dies mid-clear. Deleting
+    # page 1 shifts the list, so re-fetch top=25 each round until empty.
+    n_total = 0
+    for _ in range(40):  # cap 40×25 = up to 1000/fire so fires stay bounded
+        data = graph_file("list-mail-folder-messages",
+                          {"mailFolderId": filed_id,
+                           "filter": f"receivedDateTime lt {cutoff}",
+                           "top": 25})
+        items = data.get("value") if isinstance(data, dict) else data
+        if not isinstance(items, list):
+            break
+        batch = [m for m in items if m.get("id")]
+        if not batch:
+            break
+        for m in batch:
+            try:
+                graph_file("delete-mail-message", {"messageId": m["id"]})
+                n_total += 1
+            except Exception as exc:
+                log(f"retention: delete failed (skipped this fire) "
+                    f"err={str(exc)[:90]}")
+        time.sleep(0.3)
+    log(f"retention: cleared {n_total} items older than {FILED_DAYS}d from "
         f"{FILED_FOLDER}")
-    return n
+    return n_total
 
 
 # ---------------------------------------------------------------- LLM (muse)
