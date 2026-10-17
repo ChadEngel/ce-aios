@@ -38,9 +38,15 @@ spec:
   # Default-deny ingress.
   ingress: []
   egress:
-    # 1. DNS to k3s CoreDNS (UDP + TCP 53).
+    # 1. DNS to k3s CoreDNS (UDP + TCP 53). NOTE: namespaceSelector must be
+    #    the EXPLICIT matchLabels form — the digest cronjob's rule with
+    #    kubernetes.io/metadata.name=kube-system is PROVEN working in this
+    #    CNI; the earlier `namespaceSelector: {}` form never matched and the
+    #    pod got NameResolutionError on its first polls (2026-10-17).
     - to:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
           podSelector:
             matchLabels:
               k8s-app: kube-dns

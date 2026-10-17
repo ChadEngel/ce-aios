@@ -3,10 +3,15 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: ai
+# labels (not commonLabels!) — kustomize's commonLabels rewrites ALL
+# podSelectors, including the netpol's DNS DESTINATION (k8s-app: kube-dns),
+# which became unmatchable and killed name resolution (verified 2026-10-17).
+# `labels:` stamps metadata only by default.
+labels:
+  - pairs:
+      app.kubernetes.io/name: aios-manager
+      app.kubernetes.io/part-of: aios
 resources:
   - deployment.yaml
   - networkpolicy.yaml
   - infisical-secret-sync.yaml
-commonLabels:
-  app.kubernetes.io/name: aios-manager
-  app.kubernetes.io/part-of: aios

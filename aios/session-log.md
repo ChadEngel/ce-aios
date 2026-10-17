@@ -219,3 +219,43 @@ nodeSelector + image imported on BOTH workers.
 **Open:** R0 window start (2 weeks daily digests → review); `--enabled-tools`
 mail-subset tightening; aios-manager image/apply (InfisicalSecret template
 fixed: container env GITHUB_REPO sourced from Infisical GITHUB_APP_REPO).
+## Session 9, cont. 4 (2026-10-17 early AM) — digest 3×/day + priorities shipped; aios-manager LIVE
+
+**Chad's priorities built into the digest (0.2.3 live).** Deterministic
+two-tier classification in code: priority = people he recently SENT mail to
+(`sentitems` top-50 via `graph-list-mail-folder-messages` — no dedicated sent
+tool in the read-only grant) or keyword hits (Bluff Creek, CCHA, Crossbar,
+BearPath, flag football, CC United; `DIGEST_PRIORITY_KEYWORDS` env — editable
+without rebuild). muse-glimmer writes prose only: per-message Priority bullets
+(+why) then a ≤3-sentence Everything-else rollup. Schedule now
+`0 5,12,17 * * *` America/Chicago. Dedupe = the comment ledger itself: hidden
+`<!--aios-tracker|YYYY-MM-DD|ids:…-->` footer lines (sha1 of Graph ids — the
+ids share a same-mailbox prefix, so naive truncation collapsed all 25 to one
+key). Junk reports once; priority re-alerts while unread; silent fire when
+nothing new. Proven by back-to-back manual runs (27 seen → 3 fresh) AND the
+scheduled 17:02 CDT fire posting its own increment digest.
+
+**Delivery rec delivered**: stay on GitHub #50 for R0 (he participates →
+mobile push); revisit after the 2-week window; HA companion push = R1 option.
+
+**aios-manager (hire #1) DEPLOYED for the first time** — `caehomelab/aios-manager:0.1.0`
+(multi-arch imported arm64 util-server + amd64 both workers), InfisicalSecret
+fixed (GITHUB_APP_REPO → GITHUB_REPO env) rode in on PR #51, secret
+`aios-manager-secrets` materialized, deployment Recreate rollout OK,
+**startup → poll_ok in 1s** (900s poll interval per issue #2).
+
+**The DNS lesson (write this anywhere netpol + custom objects co-exist):**
+kustomize `commonLabels` rewrites *every* podSelector in rendered output —
+including a NetworkPolicy's DNS *destination* selector (`k8s-app: kube-dns`),
+which gained `app.kubernetes.io/name: aios-manager` and became unmatchable →
+UDP53 to 10.43.0.10 timed out from inside the pod → `NameResolutionError` on
+api.github.com. Debugged by in-pod probe (resolv.conf ok, getaddrinfo fail,
+raw UDP53 timeout) then diffing deployed netpols: digest's was clean because
+its kustomization never had commonLabels. Fix: migrate to `labels:` (metadata
+only) + explicit `namespaceSelector.matchLabels.kubernetes.io/metadata.name`
+form. Deployments with prior rewritten selectors are immutable → delete +
+recreate the Deployment object. Images: digest 0.2.1→0.2.3 (0.2.2 bundled
+pip tzdata — container had none, `ZoneInfo("America/Chicago")` silently fell
+back to UTC and the ledger date flipped after 19:00 CT; 0.2.3 added retry-on
+empty-content-or-finish=length — muse intermittently burns the token budget
+on reasoning; DIGEST_FORCE=1 lever for manual fires).
