@@ -259,3 +259,14 @@ pip tzdata — container had none, `ZoneInfo("America/Chicago")` silently fell
 back to UTC and the ledger date flipped after 19:00 CT; 0.2.3 added retry-on
 empty-content-or-finish=length — muse intermittently burns the token budget
 on reasoning; DIGEST_FORCE=1 lever for manual fires).
+
+## Session 9, cont. 5 (2026-10-17 AM) — board clear; R0 window started
+
+PR chain #51/#52/#53 all merged. Local stale branches pruned (9×). Final
+design-doc corrections landed (false `MS365_MCP_SECRET_KEY` claims + rollout
+table carried to completion + the three verified deploy lessons). Manager
+poll confirmed read-only heartbeat (JWT → token → list-open-issues → log;
+no auto-commenting by design, R0). Digest digest: none. R0 two-week gate
+starts with the 2026-10-17 05:00 America/Chicago fire (first of the new
+cadence); review target vs failure modes 1–6, then R1 (propose-triage-diffs)
+or a delivery-method change (HA companion push as the next option).
