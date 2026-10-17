@@ -226,8 +226,11 @@ def classify(messages, sent_contacts):
         addr = (frm.get("address") or "").lower()
         name = m.get("from", {}).get("emailAddress", {}).get("name") or ""
         subject = m.get("subject") or ""
-        blob = " ".join([name.lower(), addr, subject.lower(),
-                         (m.get("bodyPreview") or "")]).lower()
+        # Design rule (README/aios-roadmap): keyword matching uses subject +
+        # sender only. bodyPreview would self-reference the bot's own posted
+        # digests (GitHub notification emails quote them) and re-promote them
+        # to Priority forever — a feedback loop. Never match on body text.
+        blob = " ".join([name.lower(), addr, subject.lower()])
         reason = None
         if sent_contacts and addr in sent_contacts:
             reason = "you email this person"
