@@ -51,9 +51,14 @@ spec:
                   value: "ollama/muse-glimmer:latest"
                 # Chad's priority tiers (editable without a rebuild; code has
                 # the same default). Comma-separated, lowercase, substring
-                # match on sender name/address + subject + preview.
+                # match on sender name + address + subject only.
                 - name: DIGEST_PRIORITY_KEYWORDS
                   value: "bluff creek,ccha,crossbar,bearpath,flag football,cc united"
+                # Protected senders (Chad, 2026-10-17): never filed, never
+                # deleted — family/personal domains stay in the inbox. The
+                # sent-contacts tier is protected by design.
+                - name: DIGEST_PROTECTED_DOMAINS
+                  value: "engelmn.com,alohamn.com,crookedgate.com"
                 - name: DIGEST_SENT_TOP
                   value: "50"
                 # Filing tier (Chad, 2026-10-17): folder names + retention +
