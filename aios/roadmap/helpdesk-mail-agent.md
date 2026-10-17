@@ -1,6 +1,6 @@
 # H5 / hire #4 — Helpdesk mail agent (design, spike-resolved)
 
-**Status:** T-M1 spike **PASS** (2026-10-16) — architecture revised; mailbox decision **resolved** (primary, Chad 2026-10-16).
+**Status:** T-M1 spike **PASS** (2026-10-16); T-M2 end-to-end **PASS** (2026-10-16); **MAIL AGENT LIVE + DIGEST LIVE (3 fires/day, two-tier priorities) + aios-manager LIVE** (2026-10-16/17). R0 window running; Chad reviews digests on #50 for 2 weeks → "hired" decision.
 **Related:** #21 (was the Entra-registration gate — now shrunk to an optional R2 hardening item), `ai-it-team.md` (roster), `decisions.md` 2026-10-16 entries (mailbox=primary; Softeria adopted).
 
 Chad's 2026-10-16 direction: **promote to primary now, get it set up, start slow.** Concretely: v1 = one daily digest + on-demand reads, nothing else; tier gates unchanged.
@@ -16,7 +16,7 @@ Central question was app-only daemon auth. **Answer: it doesn't exist** — no c
 | `--read-only`: blocks non-GET Graph calls at the call layer + filters tools lacking `readOnlyHint` | PASS — R0 enforced in-server, not just at VK |
 | `--enabled-tools` + `--allowed-scopes` + `--expected-username` | PASS — surface/identity pinning available |
 | App-only (client credentials + cert) support | **FAIL** — absent; revisit only if a write-tier ever needs it (see R2 note) |
-| Token cache at rest | Encrypted envelope; key supplied via env (`MS365_MCP_SECRET_KEY`) — becomes an Infisical secret. Exact env name to confirm at deploy |
+| Token cache at rest | **CORRECTED (2026-10-17):** the daemon runs fine with its unencrypted default cache and NO extra env key was provisioned. `MS365_MCP_SECRET_KEY` was an assumed design item; it is NOT in use and no such secret exists in jarvis-jatg. PVC still treated as a secret store (failure mode 3) |
 
 ## Architecture (revised)
 
@@ -41,7 +41,7 @@ Identical topology to the original design; the identity model changed:
 
 1. **No Entra app registration for v1.** #21's `aios-helpdesk-mail` registration deferred — becomes optional hardening.
 2. **No cert/PEM, no `GRAPH_*` secrets, no `ApplicationAccessPolicy`.** Delegated scope means the token IS Chad's identity reading his own mailbox — the blast radius is narrower by construction than tenant-wide app perms + RBAC fence.
-3. **Infisical layout shrinks to one secret:** `MS365_MCP_SECRET_KEY` (32 bytes, cache encryption) in **jarvis-jatg** (agent-creds boundary rule, 2026-10-11) + non-secret `MS365_MCP_*` config vars. Synced via the existing `jarvis-jatg-universal-auth` credential from PR #44's deploy — no second credential.
+3. **Infisical layout SHRANK FURTHER — to zero agent-mail secrets (CORRECTED 2026-10-17):** no `MS365_MCP_SECRET_KEY`, no cache-encryption key. What actually synced at deploy was only the GitHub App trio (GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, GITHUB_APP_REPO→env GITHUB_REPO, Infisical key name = `GITHUB_APP_REPO`) and later the digest secret `BIFROST_VK_AIOS_HELPDESK` — via the shared `jarvis-jatg-universal-auth` credential (PR #44 / #49 / #51).
 
 ## What the spike added (new failure modes / notes)
 
@@ -74,12 +74,17 @@ Identical topology to the original design; the identity model changed:
 
 | Step | Who | Gate / note |
 |---|---|---|
-| Container build + deploy manifests (deployment/pvc/networkpolicy/service, ns ai) | assistant (PR) | after PR #44's `jarvis-jatg-universal-auth` exists (shared prereq) |
-| Image import to k3s + apply | assistant (SSH path verified session 7) | manifests merged |
-| Bifrost: dashboard admin bootstrap (setup token) + VK `aios-helpdesk` | **Chad** (#32 T6; model entry done — `muse-glimmer:latest` confirmed in registry 2026-10-16) | the remaining Bifrost-side step |
-| Bifrost MCP client `graph` | assistant (lab repo, branch+PR) | server reachable |
-| One-time device-code login (`--login`, `--expected-username`) | **Chad** (~5 min, from laptop/lounge; URL+code) | only human step in the mail chain |
-| T-M2: one tool call end-to-end (T5 pattern) | assistant | proof logged |
-| Daily digest, 2-week R0 | agent | Chad reviews logs → "hired" decision |
+| Container build + deploy manifests (deployment/pvc/networkpolicy/service, ns ai) | ✅ assistant (PR #46) | merged 2026-10-16 |
+| Image import to k3s + apply | ✅ assistant | mail 0.1.0 all nodes live 2026-10-16 AM |
+| Bifrost: dashboard admin bootstrap + VK `aios-helpdesk` | ✅ **Chad** (#32 T6) | 2026-10-16 PM |
+| Bifrost MCP client `graph` | ✅ assistant | 2026-10-16 PM |
+| One-time login (`--login`) | ✅ **Chad** | **round 3 required `--read-only` on the login** (scope-match trap, below) |
+| T-M2: live identity + tool proof | ✅ assistant | profile `graph-get-my-profile` + live inbox list, #21 comment 6218574040, label `status:review` |
+| Digest → #50 | ✅ assistant (PR #51) | v1 daily 0.1.3 → **v2 two-tier 3-fires 0.2.3** (priority tiers per Chad, tracker-ledger dedupe, `timeZone` pinned) |
+| aios-manager deploy | ✅ assistant (PR #52) | `caehomelab/aios-manager:0.1.0` RUNNING — secret sync (GITHUB_APP_REPO template fix), netpol DNS fix, **poll_ok in 1s** |
+| R0 review window (2 weeks of fires) | agent → **Chad** | failure-mode review vs the list below, then R1 |
 
-**Still pending before ANY in-cluster deploy (both manager and mail):** Chad's universal-auth credential step from PR #44 (`jarvis-jatg` identity → UI → clientId/secret → `kubectl -n ai create secret generic jarvis-jatg-universal-auth ...`).
+**Deploy-time lessons (2026-10-16/17, verified against live traffic):**
+1. **Login grant and runtime grant must match:** the daemon's silent refresh dies within ~1h when `--login` ran WITHOUT `--read-only` but the daemon boots with it (AADSTS70000-class `invalid_grant`). Rule: `--login` carries the same flags as the daemon (`--login --read-only`), and verification is a REAL tool call through Bifrost — never a second `--verify-login` process (extra refresh-token consumer).
+2. **Bifrost auto-attaches VK MCP tool schemas to `/v1/chat/completions`:** identical prompt = 62 tokens direct-Ollama vs 53,568 via the VK (muse exhausted `max_tokens` on reasoning). Per-request fix: header `x-bf-mcp-include-clients: __none__` (non-existing client name narrows to nothing; EMPTY header values are stripped and never arrive). Headers narrow, never widen. (`core/mcp/instructions.go`; docs/mcp/filtering.)
+3. **kustomize `commonLabels` rewrites EVERY podSelector — including a netpol's DNS DESTINATION** (`k8s-app: kube-dns` gained agent labels → unmatchable → UDP53 dead → NameResolutionError on api.github.com; debugged by in-pod probe + deployed-netpol diff; the digest netpol stayed clean only because its kustomization never had commonLabels). Use `labels: - pairs:` (metadata only). A previously-rewritten Deployment object hits immutable-selector → delete + recreate.
