@@ -26,6 +26,21 @@ spec:
           # never pulled from a registry.
           image: caehomelab/aios-mail-mcp:0.1.0
           imagePullPolicy: Never
+          # Boot flags pinned HERE (not in the image) so changes are reviewable
+          # in git. `--read-only` was DROPPED when the filing tier shipped
+          # (R2 promotion, Chad 2026-10-17): filing needs Mail.ReadWrite for
+          # move + folder-create + soft-delete. The daemon surface is pinned
+          # by ENABLED_TOOLS (Softeria regex option; env == flag) instead:
+          # 12 mail reads + 3 write verbs, nothing else. Exclusions include
+          # send/draft/reply/forward, folder/rule create+delete, attachment
+          # verbs, and graph-batch (arbitrary Graph requests incl. send).
+          # Scope-match rule: the device-code login MUST be re-run WITHOUT
+          # --read-only so the MSAL grant covers Mail.ReadWrite.
+          command: ["ms-365-mcp-server"]
+          args: ["--http", ":3000", "--trust-proxy-auth"]
+          env:
+            - name: ENABLED_TOOLS
+              value: "^(list-mail-messages|list-mail-folder-messages|list-mail-folder-messages-delta|get-mail-message|get-mail-message-mime|get-mail-attachment-content|list-mail-attachments|list-mail-folders|list-mail-child-folders|list-mail-rules|list-outlook-categories|get-mailbox-settings|create-mail-folder|move-mail-message|delete-mail-message)$"
           ports:
             - containerPort: 3000
               name: http

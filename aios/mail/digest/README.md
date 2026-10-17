@@ -1,52 +1,104 @@
-# aios-mail-digest — R0 mailbox digest, three fires/day (issue #50)
+# aios-mail-digest — R0 mailbox digest + filing tier (issue #50)
 
 Fires at **05:00, 12:00, 17:00 America/Chicago** (`timeZone`-pinned). Each run:
-unread inbox via Bifrost → `graph-list-mail-messages` (read-only) + recent
-sent-folders recipients → **two-tier digest** posted to
-[issue #50](https://github.com/ChadEngel/ce-aios/issues/50) via the AIOS
-GitHub App, summarized by LOCAL `ollama/muse-glimmer` (`reasoning_effort: none`).
 
-**Two-tier behavior (Chad's priorities, 2026-10-16):** "Priority" = mail from
-people Chad has sent email to (sent-items top-50, `DIGEST_SENT_TOP`) or
-keyword hits (`DIGEST_PRIORITY_KEYWORDS`: bluff creek, ccha, crossbar,
-bearpath, flag football, cc united — env-tunable, no rebuild). Priority bullet
-items RE-ALERT every fire while still unread (they are the someday-stay-in-
-inbox class); everything else (newsletters/marketing/junk) reports ONCE, then
-the job goes quiet: the comment footer carries a `<!--aios-tracker|YYYY-MM-DD|ids:…-->`
-ledger (sha1 of Graph message ids — their shared prefix makes truncation
-collide), the next fire reads it, and a fire with nothing new posts nothing.
-Priority items will be filed automatically only as a deliberate later decision
-(R1/R2 write-access tier).
+1. Reads inbox (top `DIGEST_SCAN_TOP` = 50, read-or-unread) via Bifrost →
+  `graph-list-mail-messages` (read compartment VK).
+2. Classifies **deterministically in code** — never by the model:
+   - **Priority** = mail from people Chad has sent email to (sent-items top-50)
+     or keyword hits (`DIGEST_PRIORITY_KEYWORDS`: bluff creek, ccha, crossbar,
+     bearpath, flag football, cc united). Stays in the inbox; re-alerts every
+     fire while unread.
+   - **Receipts** (subject/sender matches `DIGEST_RECEIPT_PATTERNS`) → moved
+     to the **`Receipts`** folder.
+   - **Orders** (matches `DIGEST_ORDER_PATTERNS`) → moved to the **`Orders`**
+     folder. Reads and unread alike — these are pattern-locked, so they file
+     at the next fire regardless of read state, no grace period.
+   - **Everything else non-priority** → moved to **`AIOS-Filed`**, but only
+     AFTER it has been reported in an earlier fire (grace >= 1 fire, ~5–12h
+     inbox residency). Chad's directive 2026-10-17: production digest with
+     discarded mail left in a folder, priority kept in the inbox.
+3. Summarizes the prose tiers with LOCAL `ollama/muse-glimmer`
+   (`reasoning_effort: none`; the model never classifies files or moves mail).
+4. Posts ONE comment to [issue #50](https://github.com/ChadEngel/ce-aios/issues/50)
+   via the AIOS GitHub App: model prose + a deterministic **Filed** block
+   (counts + senders/subjects per folder) + the hidden
+   `<!--aios-tracker|YYYY-MM-DD|ids:…-->` ledger (dedupe today; grace across days).
+5. Retention: every fire, `AIOS-Filed` items older than `DIGEST_FILED_DAYS`
+   (10) are **soft-deleted** — Graph DELETE moves them to Deleted Items, where
+   they remain recoverable. Deletes are constrained to the folder-scoped
+   listing of `AIOS-Filed` and age-filtered inside the Graph query.
+
+Wrongly-filed mail can be dragged back in Outlook manually, and the pattern
+lists are env-tunable in the CronJob without a rebuild.
+
+## Two-compartment VK design (R2 promotion, deliberate write grant)
+
+- **Read compartment** (`BIFROST_VK_AIOS_HELPDESK`): prose/listing reads;
+  unchanged since T-M2.
+- **File compartment** (`BIFROST_VK_AIOS_HELPDESK_FILE`): execute list is
+  EXACTLY create-mail-folder, move-mail-message, delete-mail-message,
+  list-mail-folders, list-mail-folder-messages. **No send** (mailbox
+  guardrails: never send, never hard-delete — delete is the soft Graph delete
+  to Deleted Items, folder-scoped and aged). If a message id ever reaches
+  this VK from outside the AIOS-Filed listing, it can only be moved or softly
+  deleted — the blast radius is one mailbox's folder structure.
+
+On the daemon side the surface is pinned by `ENABLED_TOOLS` (regex in
+aios/mail/k8s/deployment.yaml): 12 mail reads + the 3 write verbs.
+Send/draft/reply/forward/rule/folder-delete/attachment verbs and `graph-batch`
+are unreachable even at the daemon level.
 
 ## Deploy checklist (ordered)
 
 1. **Build the image (amd64 — workers run it):**
-   `docker buildx build --platform linux/amd64 --load -t caehomelab/aios-mail-digest:0.2.3 aios/mail/digest/`
+   `docker buildx build --platform linux/amd64 --load -t caehomelab/aios-mail-digest:0.3.0 aios/mail/digest/`
 2. **Import on BOTH amd64 workers** (k3s import is node-local; the job has no
-   PVC and only `nodeSelector: kubernetes.io/arch: amd64`, so either can host it):
+   PVC and `nodeSelector: kubernetes.io/arch: amd64`):
    ```bash
-   docker save caehomelab/aios-mail-digest:0.2.3 | \
+   docker save caehomelab/aios-mail-digest:0.3.0 | \
      ssh cengel@192.168.30.60  'sudo -n k3s ctr -n k8s.io images import -'
-   docker save caehomelab/aios-mail-digest:0.2.3 | \
+   docker save caehomelab/aios-mail-digest:0.3.0 | \
      ssh cengel@192.168.30.251 'sudo -n k3s ctr -n k8s.io images import -'
    ```
-3. **Sync + apply:** jarvis-jatg-universal-auth must exist in ns `ai` (it does),
-   then: `kubectl kustomize aios/mail/digest/k8s | ssh util-server kubectl apply -f -`.
-   This creates InfisicalSecret `aios-mail-digest-secrets-sync` → Secret
-   `aios-mail-digest-secrets` (4 keys: GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY,
-   GITHUB_APP_REPO, BIFROST_VK_AIOS_HELPDESK), the egress netpol, and the CronJob.
-   Wait ~30s for the operator sync before launching a Job.
-4. **Manual proof run:** `kubectl -n ai create job --from=cronjob/aios-mail-digest aios-mail-digest-manual`
-   → `kubectl -n ai logs job/aios-mail-digest-manual` → expect a comment on #50.
-   Cleanup: `kubectl -n ai delete job aios-mail-digest-manual`.
-5. **Verify guards:** `kubectl -n ai exec -it deploy/bifrost -- sh` probe →
-   digest pod port is NOT reachable; only egress flows are logged.
+3. **Human prerequisites (Chad, once):**
+   - Re-run the device-code login WITHOUT `--read-only` (scope match with the
+     new boot flags — see aios/mail/README.md step 4) and rollout-restart the
+     mail daemon.
+   - Create the Bifrost virtual key `aios-helpdesk-file` (execute list = the
+     five file-compartment tools above), put its key into Infisical
+     `jarvis-jatg` (prod) as `BIFROST_VK_AIOS_HELPDESK_FILE`. (Same visit:
+     optionally narrow the read VK `aios-helpdesk`'s execute list to the 12
+     mail reads.)
+4. **Sync + apply:** `kubectl kustomize aios/mail/digest/k8s | ssh util-server kubectl apply -f -`
+   → Secret `aios-mail-digest-secrets` now carries FIVE keys
+   (+`BIFROST_VK_AIOS_HELPDESK_FILE`). Wait ~60s for the operator sync.
+5. **Probe folder access BEFORE a real fire** (dry-run the compartments):
+   ```bash
+   kubectl -n ai create job --from=cronjob/aios-mail-digest aios-mail-digest-manual
+   kubectl -n ai logs job/aios-mail-digest-manual
+   kubectl -n ai delete job aios-mail-digest-manual
+   ```
+   Expect: `file:` log lines, `Orders`/`Receipts`/`AIOS-Filed` folders
+   materialized, and the **Filed** block on #50. A second manual fire right
+   after should report `filing plan: fewer/no items` (dedupe + grace working).
+6. **Retention dry-run:** move (or wait for) an item in `AIOS-Filed`, set
+   `DIGEST_FILED_DAYS=0` temporarily via
+   `kubectl -n ai set env cronjob/aios-mail-digest DIGEST_FILED_DAYS=0`,
+   fire once manually, confirm the item lands in Deleted Items, then reset
+   with `kubectl -n ai set env cronjob/aios-mail-digest DIGEST_FILED_DAYS-`.
+7. **Verify guards:** the mail daemon pod must ONLY expose the narrowed tool
+   list (tools/list through each VK, visible in the Bifrost dashboard shows
+   the pin); egress netpol unchanged.
 
 ## Failure modes to watch (R0 review window, ref #21)
 
-- Job fails with `Failed to acquire token` → the mail server's read-only grant
-  went stale again (see aios/mail/README.md step 4 — login carries --read-only).
-- `LLM: HTTP 4xx/empty content` → VK or muse-glimmer registry drift; check
-  `/v1/models` with the same VK (expect only `ollama/muse-glimmer:latest`).
-- Silent no-comment → CronJob schedule hit (07:00 America/Chicago), job logs on
-  the node, backoffLimit 2, ttl 3d. Loki carries stdout, no mail bodies.
+- `Failed to acquire token` → login/daemon scope mismatch (login MUST be
+  re-run without `--read-only` after the boot-flag change).
+- `MCP error on move-mail-message[file]` → the file VK is missing/wrong
+  execute list (check Bifrost dashboard → governance → `aios-helpdesk-file`).
+- Move fails but digest posts → per-move failures log and retry next fire;
+  counts in the Filed block reflect only successful moves.
+- Silent no-comment → job logs on the node; Loki carries stdout, no bodies.
+- `clear_filed` deleting nothing while items aged → check folder name case
+  (`AIOS-Filed` exact) and that `DIGEST_FILED_DAYS` is not inflated.

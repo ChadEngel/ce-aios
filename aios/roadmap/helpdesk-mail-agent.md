@@ -45,7 +45,7 @@ Identical topology to the original design; the identity model changed:
 
 ## What the spike added (new failure modes / notes)
 
-1. **Acts-as-Chad identity.** Graph calls carry Chad's delegated identity, not a service identity. Acceptable for **read-only** (and honest: it can only read what Chad can read). **Trigger point:** if any write tier (R2: move/categorize) is ever promoted, acting as-user is scarier than acting as-scoped-app — at that gate, build the app-only path (own registration, `Mail.ReadWrite` application, RBAC fence, cert) per the original design, kept in this file as a rollback target, or reject the write tier.
+1. **Acts-as-Chad identity.** Graph calls carry Chad's delegated identity, not a service identity. Acceptable for **read-only**. **R2 update (2026-10-17):** Chad promoted the write tier to MOVE-ONLY filing + aged soft-delete the same day the digest went production — accepted under the delegated identity because (a) the blast radius is one mailbox's folder structure (moves are instantly reversible by drag-and-drop; delete is the Graph SOFT delete to Deleted Items), (b) the file compartment VK carries exactly 5 tools and the daemon surface pins move/create/delete only, and (c) the app-only path (own app registration, `Mail.ReadWrite` application scope, RBAC fence, cert) would add an Entra registration for negligible added safety on a move-only verb set — kept here as the rollback/upgrade target and re-evaluated at R1 if scope ever widens beyond move+
 2. **Refresh-token staleness.** Delegated refresh tokens die on inactivity (~90d), CA policies, or password change — a silent-outage class. Mitigations: daily digest keeps the token warm; `--verify-login` in the CronJob's health step; a failed-refresh event lands in Loki as the loud signal. Cert-expiry silent outage from the original design is gone; this replaces it as the watch item.
 3. **The token cache is a credential at rest.** Encrypted, but treat the PVC like a secret store: no arbitrary pods in ns `ai` get read access (default-deny ingress/egress for the server pod per NetworkPolicy; PVC limited to the server).
 4. **Scope breadth.** Softeria's default app asks for its fixed, broader-than-mail scopes (`--list-permissions` to enumerate at deploy). Least-privilege hardening = BYO minimal-scope delegated app (`Mail.Read`, `User.Read`) later — a registration task Chad can batch with the scheduler's `aios-calendar` sitting (#27). Not required for R0.
@@ -56,7 +56,7 @@ Identical topology to the original design; the identity model changed:
 |---|---|---|
 | R0 (start — "slow", per Chad) | Daily digest + 4-5 read tools on demand | `--read-only` + VK execute-list, `Mail.Read`-equivalent delegated scope |
 | R1 | Propose triage rules as diffs in the digest | no config change — read-only compute |
-| R2 (decision gate, not scheduled) | one action at a time (move/categorize) | **re-evaluate identity first** (see failure-mode 1) |
+| R2 (PROMOTED 2026-10-17 by Chad) | move-only filing (Orders/Receipts/AIOS-Filed) + 10-day AIOS-Filed retention, via a separate FILE-ONLY VK (`aios-helpdesk-file`, 5 tools) and `ENABLED_TOOLS` daemon pin; send/drafts/rules/graph-batch stay unreachable |
 | Never | send, delete | out of scope |
 
 **Digest spec (v1 deliverable, daily):** unread count, needs-reply heuristic (last thread message from another party), category breakdown, top-5 aged unread, timestamps on everything. Log-PII rule holds: ids + truncated subjects in Loki, **never bodies or recipient addresses**; bodies reach model context only on explicit single-message reads.
@@ -69,6 +69,8 @@ Identical topology to the original design; the identity model changed:
 4. Graph 429s — bounded single-batch digest, backoff; not a stream.
 5. Stale digest read as current state — timestamps mandatory.
 6. Bifrost/auth drift — the `--trust-proxy-auth` mode trusts the network boundary; if NetworkPolicy ever opens beyond Bifrost, the mailbox rides the opening. Review the policy in the R0 gate.
+7. Wrong-filed mail (order/receipt pattern false-positive) — pattern-locked on subject+sender (never body), env-tunable (no rebuild), and reversible: move-back is a manual drag in Outlook; the Filed block names what went where.
+8. Retention over-delete — deletes are constrained to the folder-scoped listing of `AIOS-Filed`, age-filtered inside the Graph query, and SOFT (Deleted Items). A pattern bug cannot reach Priority mail (never planned) or anything outside that folder listing.
 
 ## Rollout
 
@@ -81,6 +83,7 @@ Identical topology to the original design; the identity model changed:
 | One-time login (`--login`) | ✅ **Chad** | **round 3 required `--read-only` on the login** (scope-match trap, below) |
 | T-M2: live identity + tool proof | ✅ assistant | profile `graph-get-my-profile` + live inbox list, #21 comment 6218574040, label `status:review` |
 | Digest → #50 | ✅ assistant (PR #51) | v1 daily 0.1.3 → **v2 two-tier 3-fires 0.2.3** (priority tiers per Chad, tracker-ledger dedupe, `timeZone` pinned) |
+| **R2 filing promotion (Chad, production directive)** | ✅ assistant (PR #55) | digest **0.3.0**: deterministic filing (Orders/Receipts immediate; junk after grace; priorities never move) + 10-day AIOS-Filed retention; two-compartment VKs + `ENABLED_TOOLS` pin; login re-run without `--read-only` |
 | aios-manager deploy | ✅ assistant (PR #52) | `caehomelab/aios-manager:0.1.0` RUNNING — secret sync (GITHUB_APP_REPO template fix), netpol DNS fix, **poll_ok in 1s** |
 | R0 review window (2 weeks of fires) | agent → **Chad** | failure-mode review vs the list below, then R1 |
 
