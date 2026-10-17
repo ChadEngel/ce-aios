@@ -60,6 +60,11 @@ PRIORITY_KEYWORDS = [k.strip().lower() for k in os.environ.get(
     "DIGEST_PRIORITY_KEYWORDS",
     "bluff creek,ccha,crossbar,bearpath,flag football,cc united").split(",")
     if k.strip()]
+
+# Protected senders — NEVER filed, never deleted; they stay in the inbox even
+# when they match nothing. Family/personal domains + the sent-contacts tier.
+PROTECTED_DOMAINS = [d.strip().lower() for d in os.environ.get(
+    "DIGEST_PROTECTED_DOMAINS", "").split(",") if d.strip()]
 SENT_TOP = int(os.environ.get("DIGEST_SENT_TOP", "50"))
 # Filing config (Chad, 2026-10-17). Patterns are regex FRAGMENTS matched
 # case-insensitively against subject + sender display name ONLY (never the
@@ -183,14 +188,24 @@ def graph_file(name, args):
 
 
 def fetch_inbox():
-    """One inbox listing (read-or-unread; prose and filing take subsets).
-    A read-only receipt/confirmation still needs filing — no isRead filter."""
-    data = graph_call("list-mail-messages", {"mailbox": "inbox", "top": SCAN_TOP})
+    """One INBOX-folder listing (read-or-unread; prose and filing take subsets).
+    A read-only receipt/confirmation still needs filing — no isRead filter.
+    Uses list-mail-folder-messages with the real Inbox folder id: the generic
+    list-mail-messages tool hits /me/messages = the ENTIRE mailbox newest-first
+    (its `mailbox` argument is silently dropped), which re-scanned already-filed
+    folder contents and mis-sized every listing. Folder-scoping is truthful."""
+    inbox_id = folder_map().get("inbox")
+    if not inbox_id:
+        raise RuntimeError("Inbox folder not found")
+    data = graph_call("list-mail-folder-messages",
+                      {"mailFolderId": inbox_id, "top": SCAN_TOP,
+                       "orderby": "receivedDateTime desc"})
     items = data.get("value") if isinstance(data, dict) else data
     if not isinstance(items, list):
-        raise RuntimeError(f"unexpected list-mail-messages shape: {str(data)[:200]}")
+        raise RuntimeError(f"unexpected inbox listing shape: {str(data)[:200]}")
     unread_n = sum(1 for m in items if m.get("isRead") is False)
-    log(f"mail: listed={len(items)} unread={unread_n} (scan top {SCAN_TOP})")
+    log(f"mail: listed={len(items)} unread={unread_n} "
+        f"(scan top {SCAN_TOP}, folder-scoped)")
     return items, unread_n
 
 
@@ -236,8 +251,13 @@ def classify(messages, sent_contacts):
             reason = "you email this person"
         else:
             hit = next((k for k in PRIORITY_KEYWORDS if k in blob), None)
+            dom = next((d for d in PROTECTED_DOMAINS
+                        if addr.endswith("@" + d) or addr.endswith("." + d)),
+                       None)
             if hit:
                 reason = f"matches '{hit}'"
+            elif dom:
+                reason = f"protected sender ({dom})"
         if reason:
             _file = None
         elif any(p.search(subject) or p.search(name) for p in RECEIPT_PATTERNS):

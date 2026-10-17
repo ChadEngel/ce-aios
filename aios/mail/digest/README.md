@@ -5,8 +5,10 @@ Fires at **05:00, 12:00, 17:00 America/Chicago** (`timeZone`-pinned). Each run:
 1. Reads inbox (top `DIGEST_SCAN_TOP` = 50, read-or-unread) via Bifrost →
   `graph-list-mail-messages` (read compartment VK).
 2. Classifies **deterministically in code** — never by the model:
-   - **Priority** = mail from people Chad has sent email to (sent-items top-50)
-     or keyword hits (`DIGEST_PRIORITY_KEYWORDS`: bluff creek, ccha, crossbar,
+   - **Priority** = mail from people Chad has sent email to (sent-items
+     tier), senders on `DIGEST_PROTECTED_DOMAINS` (engelmn.com, alohamn.com,
+     crookedgate.com — family/personal domains, never filed or deleted), or
+     keyword hits (`DIGEST_PRIORITY_KEYWORDS`: bluff creek, ccha, crossbar,
      bearpath, flag football, cc united). Stays in the inbox; re-alerts every
      fire while unread.
    - **Receipts** (subject/sender matches `DIGEST_RECEIPT_PATTERNS`) → moved
@@ -20,6 +22,12 @@ Fires at **05:00, 12:00, 17:00 America/Chicago** (`timeZone`-pinned). Each run:
      discarded mail left in a folder, priority kept in the inbox.
 3. Summarizes the prose tiers with LOCAL `ollama/muse-glimmer`
    (`reasoning_effort: none`; the model never classifies files or moves mail).
+
+   Scanning is INBOX-FOLDER-SCOPED (`list-mail-folder-messages` with the Inbox
+   folder id). The generic `list-mail-messages` tool hits `/me/messages` = the
+   ENTIRE mailbox newest-first and silently ignores any `mailbox` argument —
+   using it caused whole-mailbox scans that re-processed already-filed folder
+   contents (fixed 2026-10-17 after a live bulk-cleanup run surfaced it).
 4. Posts ONE comment to [issue #50](https://github.com/ChadEngel/ce-aios/issues/50)
    via the AIOS GitHub App: model prose + a deterministic **Filed** block
    (counts + senders/subjects per folder) + the hidden
