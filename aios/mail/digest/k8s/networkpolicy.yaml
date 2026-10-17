@@ -1,0 +1,42 @@
+# Digest job egress policy — deliberately DIFFERENT from the mail server's.
+#
+# The mail server's netpol denies RFC1918 on 443 (it must only ever reach
+# graph.microsoft.com outside the cluster). The digest job MUST reach
+# llm.caehomelab.com, which resolves to 192.168.30.217 (util-server Traefik,
+# RFC1918) in addition to api.github.com (public). Hence 443 is allowed to ANY
+# destination here, including RFC1918. Egress-only: nothing may call the job.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aios-mail-digest-netpol
+  namespace: ai
+  labels:
+    app.kubernetes.io/name: aios-mail-digest
+    app.kubernetes.io/part-of: aios
+spec:
+  podSelector:
+    matchLabels:
+      app: aios-mail-digest
+  policyTypes:
+    - Egress
+  egress:
+    # kube-dns only; no other cluster-internal ports needed besides 443.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # HTTPS anywhere: Bifrost (192.168.30.217, RFC1918) + api.github.com.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
