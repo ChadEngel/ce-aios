@@ -21,13 +21,13 @@ Priority items will be filed automatically only as a deliberate later decision
 ## Deploy checklist (ordered)
 
 1. **Build the image (amd64 — workers run it):**
-   `docker buildx build --platform linux/amd64 --load -t caehomelab/aios-mail-digest:0.2.0 aios/mail/digest/`
+   `docker buildx build --platform linux/amd64 --load -t caehomelab/aios-mail-digest:0.2.3 aios/mail/digest/`
 2. **Import on BOTH amd64 workers** (k3s import is node-local; the job has no
    PVC and only `nodeSelector: kubernetes.io/arch: amd64`, so either can host it):
    ```bash
-   docker save caehomelab/aios-mail-digest:0.2.0 | \
+   docker save caehomelab/aios-mail-digest:0.2.3 | \
      ssh cengel@192.168.30.60  'sudo -n k3s ctr -n k8s.io images import -'
-   docker save caehomelab/aios-mail-digest:0.2.0 | \
+   docker save caehomelab/aios-mail-digest:0.2.3 | \
      ssh cengel@192.168.30.251 'sudo -n k3s ctr -n k8s.io images import -'
    ```
 3. **Sync + apply:** jarvis-jatg-universal-auth must exist in ns `ai` (it does),

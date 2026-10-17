@@ -47,6 +47,9 @@ PRIORITY_KEYWORDS = [k.strip().lower() for k in os.environ.get(
     "bluff creek,ccha,crossbar,bearpath,flag football,cc united").split(",")
     if k.strip()]
 SENT_TOP = int(os.environ.get("DIGEST_SENT_TOP", "50"))
+# DIGEST_FORCE=1: manual fire — post the full current picture ignoring today's
+# ledger (tracker still updated). Scheduled fires never force.
+FORCE = os.environ.get("DIGEST_FORCE") == "1"
 MAIL_TOP = int(os.environ.get("DIGEST_MAIL_TOP", "25"))
 BODY_PREVIEW_CHARS = int(os.environ.get("DIGEST_PREVIEW_CHARS", "400"))
 MAX_COMMENT_CHARS = 4000
@@ -215,27 +218,34 @@ def summarize(classified, unread_count):
         + json.dumps([{k: v for k, v in c.items() if k != '_id'}
                       for c in classified], ensure_ascii=False)
         + "\n```")
-    body = {
-        "model": MODEL,
-        "messages": [{"role": "system", "content": system},
-                     {"role": "user", "content": user}],
-        "temperature": 0.3,
-        "max_tokens": 900,
-        "reasoning_effort": "none",
-    }
-    resp = http_json("POST", f"{BIFROST_URL}/v1/chat/completions",
-                     {"x-bf-vk": VK,
-                      # Deny-all MCP tools per request: an EMPTY header value is
-                      # stripped and never reaches Bifrost; a non-existing client
-                      # name narrows to nothing and survives. Headers may narrow,
-                      # never widen; the /mcp/graph leg of this script is untouched.
-                      "x-bf-mcp-include-clients": "__none__",
-                      "Content-Type": "application/json"}, body,
-                     timeout=LLM_TIMEOUT)
-    content = resp["choices"][0]["message"]["content"]
-    if not content.strip():
-        raise RuntimeError(f"empty model content (finish={resp['choices'][0].get('finish_reason')})")
-    return content.strip()
+    # muse-glimmer intermittently burns its whole token budget on reasoning
+    # (finish=length, empty content) even with reasoning_effort=none; one retry
+    # with extra headroom paper over the flake without a whole-pod retry.
+    for attempt, tokens in ((1, 1200), (2, 1800)):
+        body = {
+            "model": MODEL,
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            "temperature": 0.3,
+            "max_tokens": tokens,
+            "reasoning_effort": "none",
+        }
+        resp = http_json("POST", f"{BIFROST_URL}/v1/chat/completions",
+                         {"x-bf-vk": VK,
+                          # Deny-all MCP tools per request: an EMPTY header value is
+                          # stripped and never reaches Bifrost; a non-existing client
+                          # name narrows to nothing and survives. Headers may narrow,
+                          # never widen; the /mcp/graph leg of this script is untouched.
+                          "x-bf-mcp-include-clients": "__none__",
+                          "Content-Type": "application/json"}, body,
+                         timeout=LLM_TIMEOUT)
+        choice = resp["choices"][0]
+        content = choice["message"].get("content") or ""
+        if content.strip() and choice.get("finish_reason") != "length":
+            return content.strip()
+        log(f"attempt {attempt}: empty model content "
+            f"(finish={resp['choices'][0].get('finish_reason')}, tokens={tokens})")
+    raise RuntimeError("empty model content after retry (finish=length)")
 
 
 def github_install_token():
@@ -294,6 +304,9 @@ def github_comment(digest_text, reported_ids, install_token):
 def main():
     messages, unread = fetch_mail()
     seen = issue_comments_today()
+    if FORCE:
+        seen = set()
+        log("DIGEST_FORCE=1 — full picture, ledger ignored")
     # Priority items re-alert every fire while unread; "other" tier reports
     # once (the tracker holds today's already-posted ids).
     if not unread:
