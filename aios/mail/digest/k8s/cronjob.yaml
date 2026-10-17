@@ -35,7 +35,7 @@ spec:
             kubernetes.io/arch: amd64
           containers:
             - name: digest
-              image: caehomelab/aios-mail-digest:0.2.3
+              image: caehomelab/aios-mail-digest:0.3.0
               imagePullPolicy: Never
               envFrom:
                 - secretRef:
@@ -55,6 +55,20 @@ spec:
                 - name: DIGEST_PRIORITY_KEYWORDS
                   value: "bluff creek,ccha,crossbar,bearpath,flag football,cc united"
                 - name: DIGEST_SENT_TOP
+                  value: "50"
+                # Filing tier (Chad, 2026-10-17): folder names + retention +
+                # scan window. Pattern lists are env-tunable regex fragments
+                # (subject + sender-name match). All defaults also live in
+                # digest.py, so any of these can be dropped to fall back.
+                - name: DIGEST_ORDERS_FOLDER
+                  value: "Orders"
+                - name: DIGEST_RECEIPTS_FOLDER
+                  value: "Receipts"
+                - name: DIGEST_FILED_FOLDER
+                  value: "AIOS-Filed"
+                - name: DIGEST_FILED_DAYS
+                  value: "10"
+                - name: DIGEST_SCAN_TOP
                   value: "50"
               resources:
                 requests:

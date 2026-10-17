@@ -21,16 +21,23 @@ cache lives on the `aios-mail-cache` PVC.
 3. **Apply:** `kubectl apply -k aios/mail/k8s/` — wait for
    `kubectl -n ai rollout status deploy/aios-mail-mcp`.
 4. **ONE human step — device-code login** (Chad, ~5 min):
-   `kubectl -n ai exec -it deploy/aios-mail-mcp -- ms-365-mcp-server --login --read-only`
+   `kubectl -n ai exec -it deploy/aios-mail-mcp -- ms-365-mcp-server --login`
    then `kubectl -n ai rollout restart deploy/aios-mail-mcp`.
-   **The `--read-only` flag is load-bearing:** the login process caches an
-   MSAL grant under the requested scopes; the server acquires refreshes with
-   the read-only scope subset. Log in WITHOUT the flag (or with --verify-login,
-   a second MSAL consumer) and every refresh after the first access-token
-   expiry (~1h) dies with "Failed to acquire token". Scope match or death.
-   (Upstream #522 diagnosed the same symptom class; our variant = scope
-   mismatch between login and daemon.) Verify by a real tool call through
-   Bifrost, never a second --verify-login process.
+   **The login now runs WITHOUT `--read-only` (changed 2026-10-17 with the
+   R2 filing promotion):** the filing tier needs `Mail.ReadWrite` (move +
+   folder-create + soft-delete), and the MSAL grant must cover the full
+   scope set the daemon acquires. Scope-match rule unchanged and load-
+   bearing: login flags must MATCH the daemon boot flags — the daemon boots
+   WITHOUT `--read-only` (see aios/mail/k8s/deployment.yaml `command/args`),
+   so the login must too. Log in with `--read-only` and the filing leg dies
+   at every refresh with "Failed to acquire token" after the first access-
+   token expiry (~1h); the daemon surface itself is pinned separately by
+   `ENABLED_TOOLS` (12 mail reads + move/create/delete only — send, drafts,
+   rule/attachment verbs and graph-batch are excluded regardless of scope).
+   (Upstream #522 diagnosed the same symptom class earlier; our variant =
+   scope mismatch between login and daemon.) Verify with a real tool call
+   through Bifrost AND a real, folder-scoped filing probe (move a test
+   message and move it back), never a second --verify-login process.
 5. **Bifrost side (all in the LAB repo, merged PRs #11/#12):** the `graph`
    MCP client is file-declared (in-memory only — it never appears in
    config_mcp_clients), and file-declared clients can ONLY be granted to a

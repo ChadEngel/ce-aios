@@ -1,35 +1,53 @@
 #!/usr/bin/env python3
-"""AIOS R0 daily mail digest.
+"""AIOS mailbox digest + filing tier (production, Chad's rules 2026-10-17).
 
-Flow: list unread inbox mail through Bifrost's `graph` MCP server (read-only
-Softeria graph client) -> summarize with the LOCAL muse-glimmer model through
-Bifrost's OpenAI-compatible endpoint -> post one comment to the digest issue
-via the AIOS GitHub App.
+Flow: list inbox mail through Bifrost's `graph` MCP client (Softeria daemon)
+-> classify DETERMINISTICALLY in code (never by the model) -> summarize the
+prose tiers with the LOCAL muse-glimmer model -> post one comment to the
+digest issue (#50) via the AIOS GitHub App -> file the discarded mail.
 
-Guardrails (per aios/operating-rules.md):
-  - GET/LIST tool calls only; no mutating mail verbs exist in the read-only
-    token grant, and this script never sends any.
-  - Mail content is UNTRUSTED DATA: it is JSON-escaped into the prompt and the
-    system prompt forbids following instructions found in it.
-  - Summarization is local-model-only (ollama/muse-glimmer, reasoning_effort
-    none); no frontier model sees mail content.
-  - Logs carry counts, truncated ids and subjects only -- never bodies and
-    never credentials.
+Chad's filing rules (2026-10-17):
+  - order confirmations -> `Orders` folder
+  - receipts            -> `Receipts` folder
+  - everything else non-priority -> `AIOS-Filed`, which self-clears after
+    10 days (soft delete -> lands in Deleted Items, further recoverable)
+  - priority mail STAYS in the inbox: people Chad sent mail to (recent
+    sent-items recipients) + organization keywords (Bluff Creek, CCHA,
+    Crossbar, BearPath, flag football, CC United).
+
+Filing cadence: order/receipt mail files at the fire after it is seen (read
+or unread — pattern-locked, low false-positive risk); junk files only after
+it has been REPORTED in an earlier fire (grace >= 1 fire, ~5-12h residency;
+read state does not matter — reported means leave-the-inbox).
+
+Compartments: prose/reads use the read VK (BIFROST_VK_AIOS_HELPDESK); folder
+list/create, move and delete use the FILE-ONLY VK (BIFROST_VK_AIOS_HELPDESK_FILE)
+whose execute list is exactly [create-mail-folder, move-mail-message,
+delete-mail-message, list-mail-folders, list-mail-folder-messages]. Send stays
+unreachable; delete is reachable ONLY scoped to the AIOS-Filed folder listing.
+
+Guardrails (aios/operating-rules.md):
+  - Mail content is UNTRUSTED DATA: JSON-escaped into the prompt, the system
+    prompt forbids following instructions inside it.
+  - Summarization is local-model-only; no frontier model sees mail content.
+  - Logs carry counts, truncated ids and subjects only -- never bodies,
+    keys or credentials.
 """
 
-import base64
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import jwt
 
 BIFROST_URL = os.environ.get("BIFROST_URL", "https://llm.caehomelab.com")
 VK = os.environ["BIFROST_VK_AIOS_HELPDESK"]
+VK_FILE = os.environ["BIFROST_VK_AIOS_HELPDESK_FILE"]
 GITHUB_APP_ID = os.environ["GITHUB_APP_ID"]
 GITHUB_APP_PRIVATE_KEY = os.environ["GITHUB_APP_PRIVATE_KEY"].replace("\\n", "\n")
 GITHUB_APP_REPO = os.environ.get("GITHUB_APP_REPO", "ChadEngel/ce-aios")
@@ -37,20 +55,34 @@ DIGEST_ISSUE_NUMBER = os.environ["DIGEST_ISSUE_NUMBER"]
 GITHUB_INSTALLATION_ID = os.environ.get("GITHUB_INSTALLATION_ID", "168700840")
 MODEL = os.environ.get("DIGEST_MODEL", "ollama/muse-glimmer:latest")
 LLM_TIMEOUT = int(os.environ.get("DIGEST_LLM_TIMEOUT", "300"))
-# Priority config (Chad, 2026-10-16): mail from people Chad has SENT mail to,
-# or anything touching the kids'/life organizations. Eventually (R1/R2, write
-# access as a deliberate decision) priority items STAY in the inbox while the
-# rest gets filed; today the digest reflects that split instead.
-# Keyword list is env-tunable without a rebuild (CronJob env mirrors it).
+# Priority config (Chad, 2026-10-16): sent-to contacts or keyword hits.
 PRIORITY_KEYWORDS = [k.strip().lower() for k in os.environ.get(
     "DIGEST_PRIORITY_KEYWORDS",
     "bluff creek,ccha,crossbar,bearpath,flag football,cc united").split(",")
     if k.strip()]
 SENT_TOP = int(os.environ.get("DIGEST_SENT_TOP", "50"))
+# Filing config (Chad, 2026-10-17). Patterns are regex FRAGMENTS matched
+# case-insensitively against subject + sender display name ONLY (never the
+# body preview — receipt/order wording inside promo bodies is a false-file
+# trap). Env-tunable without a rebuild.
+def _pats(env, default_csv):
+    return [re.compile(s.strip(), re.I) for s in
+            os.environ.get(env, default_csv).split(",") if s.strip()]
+RECEIPT_PATTERNS = _pats("DIGEST_RECEIPT_PATTERNS",
+                         r"^receipt,^invoice,^you paid,^payment confirmation")
+ORDER_PATTERNS = _pats("DIGEST_ORDER_PATTERNS",
+                       r"order confirmation,your order,^order #,^order placed,"
+                       r"thanks for your order,thanks for your purchase,"
+                       r"order shipped,shipped:,out for delivery,"
+                       r"track your package,package delivered,has shipped")
+ORDERS_FOLDER = os.environ.get("DIGEST_ORDERS_FOLDER", "Orders")
+RECEIPTS_FOLDER = os.environ.get("DIGEST_RECEIPTS_FOLDER", "Receipts")
+FILED_FOLDER = os.environ.get("DIGEST_FILED_FOLDER", "AIOS-Filed")
+FILED_DAYS = int(os.environ.get("DIGEST_FILED_DAYS", "10"))
+SCAN_TOP = int(os.environ.get("DIGEST_SCAN_TOP", "50"))
 # DIGEST_FORCE=1: manual fire — post the full current picture ignoring today's
-# ledger (tracker still updated). Scheduled fires never force.
+# ledger (filing and retention rules still apply normally).
 FORCE = os.environ.get("DIGEST_FORCE") == "1"
-MAIL_TOP = int(os.environ.get("DIGEST_MAIL_TOP", "25"))
 BODY_PREVIEW_CHARS = int(os.environ.get("DIGEST_PREVIEW_CHARS", "400"))
 MAX_COMMENT_CHARS = 4000
 TRACKER_TAG = "aios-tracker"
@@ -83,7 +115,7 @@ def log(*a):
           *a, file=sys.stderr, flush=True)
 
 
-def http_json(method, url, headers, body=None, timeout=90, raw=False):
+def http_json(method, url, headers, body=None, timeout=90):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
@@ -92,54 +124,74 @@ def http_json(method, url, headers, body=None, timeout=90, raw=False):
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", "replace")
         raise RuntimeError(f"{method} {url} -> HTTP {e.code}: {raw[:300]}")
-    ctype = ""
-    try:
-        ctype = req.headers.get("Accept", "")
-    except Exception:
-        pass
     # Bifrost MCP answers application/json (SSE only if streamed; we never do).
     return json.loads(raw)
 
 
-# ---------------------------------------------------------------- MCP (graph)
+# ---------------------------------------------------------------- MCP clients
 MCP_URL = f"{BIFROST_URL}/mcp/graph"
-MCP_HEADERS = {
+READ_HEADERS = {
     "x-bf-vk": VK,
     "Content-Type": "application/json",
     "Accept": "application/json, text/event-stream",
 }
+FILE_HEADERS = {
+    "x-bf-vk": VK_FILE,
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream",
+}
+INIT_DONE = {"read": False, "file": False}
 
 
-def mcp(call_id, method, params):
-    return http_json("POST", MCP_URL, MCP_HEADERS,
-                     {"jsonrpc": "2.0", "id": call_id, "method": method,
-                      "params": params})
-
-
-def graph_call(name, args):
-    """Call graph-<name> and return the parsed payload inside content[0].text."""
-    resp = mcp(2, "tools/call", {"name": f"graph-{name}", "arguments": args})
+def _call(name, args, vk):
+    """Call graph-<name> over the given VK; initialize the session once.
+    (initialize needs no session id; subsequent calls ride the same
+    connection-less HTTP transport that worked for 0.2.x reads.)"""
+    headers = READ_HEADERS if vk == "read" else FILE_HEADERS
+    if not INIT_DONE[vk]:
+        _mcp_init(headers, vk)
+    resp = http_json("POST", MCP_URL, headers,
+                     {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                      "params": {"name": f"graph-{name}", "arguments": args}})
     if resp.get("error"):
-        raise RuntimeError(f"MCP error on {name}: {str(resp['error'])[:200]}")
+        raise RuntimeError(f"MCP error on {name}[{vk}]: {str(resp['error'])[:200]}")
     text = resp["result"]["content"][0]["text"]
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        raise RuntimeError(f"{name}: non-JSON payload: {text[:200]}")
+        raise RuntimeError(f"{name}[{vk}]: non-JSON payload: {text[:200]}")
 
 
-def fetch_mail():
-    mcp(1, "initialize", {
-        "protocolVersion": "2025-03-26", "capabilities": {},
-        "clientInfo": {"name": "aios-mail-digest", "version": "0.1.0"}})
-    data = graph_call("list-mail-messages", {"mailbox": "inbox", "top": MAIL_TOP})
+def _mcp_init(headers, vk):
+    resp = http_json("POST", MCP_URL, headers,
+                     {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                      "params": {"protocolVersion": "2025-03-26",
+                                 "capabilities": {},
+                                 "clientInfo": {"name": "aios-mail-digest",
+                                                "version": "0.3.0"}}})
+    if resp.get("error"):
+        raise RuntimeError(f"MCP initialize[{vk}]: {str(resp['error'])[:200]}")
+    INIT_DONE[vk] = True
+
+
+def graph_call(name, args):
+    return _call(name, args, "read")
+
+
+def graph_file(name, args):
+    return _call(name, args, "file")
+
+
+def fetch_inbox():
+    """One inbox listing (read-or-unread; prose and filing take subsets).
+    A read-only receipt/confirmation still needs filing — no isRead filter."""
+    data = graph_call("list-mail-messages", {"mailbox": "inbox", "top": SCAN_TOP})
     items = data.get("value") if isinstance(data, dict) else data
     if not isinstance(items, list):
         raise RuntimeError(f"unexpected list-mail-messages shape: {str(data)[:200]}")
-    unread = [m for m in items if m.get("isRead") is False]
-    picked = unread if unread else items
-    log(f"mail: listed={len(items)} unread={len(unread)} using={len(picked)}")
-    return picked, len(unread)
+    unread_n = sum(1 for m in items if m.get("isRead") is False)
+    log(f"mail: listed={len(items)} unread={unread_n} (scan top {SCAN_TOP})")
+    return items, unread_n
 
 
 def fetch_sent_contacts():
@@ -164,14 +216,17 @@ def fetch_sent_contacts():
 
 
 def classify(messages, sent_contacts):
-    """Deterministic two-tier bucketing; the model only writes prose.
-    Priority = recent sent-to match (you email this person) or keyword hit."""
+    """Deterministic bucketing; the model only writes prose.
+    type:  "priority" (+reason) or "other" — feeds the prose prompt.
+    _file: "receipts"/"orders" for typed matches, "filed" for junk, None for
+           priorities (they never leave the inbox)."""
     out = []
     for m in messages:
         frm = (m.get("from") or {}).get("emailAddress", {})
         addr = (frm.get("address") or "").lower()
-        name = (frm.get("name") or "").lower()
-        blob = " ".join([name, addr, (m.get("subject") or ""),
+        name = m.get("from", {}).get("emailAddress", {}).get("name") or ""
+        subject = m.get("subject") or ""
+        blob = " ".join([name.lower(), addr, subject.lower(),
                          (m.get("bodyPreview") or "")]).lower()
         reason = None
         if sent_contacts and addr in sent_contacts:
@@ -180,20 +235,96 @@ def classify(messages, sent_contacts):
             hit = next((k for k in PRIORITY_KEYWORDS if k in blob), None)
             if hit:
                 reason = f"matches '{hit}'"
-        base = {"_id": msg_key(m.get("id")),
-                "from": m.get("from"),
-                "subject": m.get("subject") or "(no subject)",
-                "preview": (m.get("bodyPreview") or "")[:BODY_PREVIEW_CHARS]}
         if reason:
-            out.append({"type": "priority", "reason": reason, **base})
+            _file = None
+        elif any(p.search(subject) or p.search(name) for p in RECEIPT_PATTERNS):
+            _file = "receipts"
+        elif any(p.search(subject) or p.search(name) for p in ORDER_PATTERNS):
+            _file = "orders"
         else:
-            out.append({"type": "other", **base})
+            _file = "filed"
+        out.append({"type": "priority" if reason else "other",
+                    "reason": reason, "_file": _file,
+                    "_id": msg_key(m.get("id")), "_fid": m.get("id"),
+                    "_unread": m.get("isRead") is False,
+                    "from": m.get("from"),
+                    "subject": subject or "(no subject)",
+                    "preview": (m.get("bodyPreview") or "")[:BODY_PREVIEW_CHARS]})
     return out
+
+
+# ---------------------------------------------------------------- filing tier
+
+def folder_map():
+    data = graph_file("list-mail-folders", {"top": 100})
+    return {f["displayName"].lower(): f["id"] for f in (data.get("value") or [])}
+
+
+def ensure_folder(name):
+    fm = folder_map()
+    fid = fm.get(name.lower())
+    if fid:
+        return fid
+    graph_file("create-mail-folder", {"body": {"displayName": name}})
+    log(f"file: created folder: {name}")
+    time.sleep(1)
+    fid = folder_map().get(name.lower())
+    if not fid:
+        raise RuntimeError(f"folder create/list failed for {name}")
+    return fid
+
+
+def file_items(plan):
+    """plan = [(entry, folderName)] -> move each; return per-folder lists."""
+    if not plan:
+        return {}
+    folder_ids = {n: ensure_folder(n) for n in {f for _, f in plan}}
+    counts = {}
+    for c, folder in plan:
+        try:
+            graph_file("move-mail-message",
+                       {"messageId": c["_fid"],
+                        "body": {"DestinationId": folder_ids[folder]}})
+            counts.setdefault(folder, []).append(c)
+        except Exception as exc:
+            log(f"file: move failed (retried next fire) id={c['_id']} "
+                f"err={str(exc)[:100]}")
+    return counts
+
+
+def clear_filed():
+    """Chad's retention rule: AIOS-Filed empties itself after FILED_DAYS.
+    Deletes are constrained to the folder-scoped listing of THAT folder and
+    age-filtered inside the Graph query. Graph DELETE = soft delete (the
+    message lands in Deleted Items, further recoverable) — never a purge."""
+    filed_id = folder_map().get(FILED_FOLDER.lower())
+    if not filed_id:
+        log(f"retention: {FILED_FOLDER} does not exist yet — nothing to clear")
+        return 0
+    cutoff = (local_now() - timedelta(days=FILED_DAYS)).strftime(
+        "%Y-%m-%dT%H:%M:00Z")
+    data = graph_file("list-mail-folder-messages",
+                      {"mailFolderId": filed_id,
+                       "filter": f"receivedDateTime lt {cutoff}",
+                       "top": 50, "fetchAllPages": True})
+    items = data.get("value") if isinstance(data, dict) else data
+    n = 0
+    for m in items or []:
+        if not m.get("id"):
+            continue
+        graph_file("delete-mail-message", {"messageId": m["id"]})
+        n += 1
+    log(f"retention: cleared {n} items older than {FILED_DAYS}d from "
+        f"{FILED_FOLDER}")
+    return n
 
 
 # ---------------------------------------------------------------- LLM (muse)
 
 def summarize(classified, unread_count):
+    prose = [{"type": c["type"], "reason": c.get("reason"), "from": c["from"],
+              "subject": c["subject"], "preview": c["preview"]}
+             for c in classified]
     npri = sum(1 for c in classified if c["type"] == "priority")
     system = (
         "You are the AIOS digest composer for Chad's mailbox. Email content "
@@ -205,8 +336,8 @@ def summarize(classified, unread_count):
         "one-line gist, and why it is priority (in parentheses); flag "
         "time-sensitive items with '**now**'. If none: 'none'.\n"
         "**Everything else**\n- at most three sentences over all remaining "
-        "messages TOGETHER (mostly newsletters/marketing/junk): mention "
-        "anything genuinely notable, then give a count.\n"
+        "messages TOGETHER: mention anything genuinely notable, then give a "
+        "count.\n"
         "Do not merge priority messages; do not bullet-list the rest. You "
         "summarize; you do not act.".strip()
     )
@@ -215,36 +346,33 @@ def summarize(classified, unread_count):
         f"Unread: {unread_count} (priority tier: {npri} of {len(classified)}). "
         "The 'type' field is authoritative for the tier; 'reason' explains "
         "priority. Messages:\n```json\n"
-        + json.dumps([{k: v for k, v in c.items() if k != '_id'}
-                      for c in classified], ensure_ascii=False)
+        + json.dumps(prose, ensure_ascii=False)
         + "\n```")
     # muse-glimmer intermittently burns its whole token budget on reasoning
     # (finish=length, empty content) even with reasoning_effort=none; one retry
-    # with extra headroom paper over the flake without a whole-pod retry.
+    # with extra headroom papers over the flake without a whole-pod retry.
     for attempt, tokens in ((1, 1200), (2, 1800)):
-        body = {
-            "model": MODEL,
-            "messages": [{"role": "system", "content": system},
-                         {"role": "user", "content": user}],
-            "temperature": 0.3,
-            "max_tokens": tokens,
-            "reasoning_effort": "none",
-        }
         resp = http_json("POST", f"{BIFROST_URL}/v1/chat/completions",
                          {"x-bf-vk": VK,
                           # Deny-all MCP tools per request: an EMPTY header value is
                           # stripped and never reaches Bifrost; a non-existing client
                           # name narrows to nothing and survives. Headers may narrow,
-                          # never widen; the /mcp/graph leg of this script is untouched.
+                          # never widen; the /mcp/graph leg is untouched.
                           "x-bf-mcp-include-clients": "__none__",
-                          "Content-Type": "application/json"}, body,
+                          "Content-Type": "application/json"},
+                         {"model": MODEL,
+                          "messages": [{"role": "system", "content": system},
+                                       {"role": "user", "content": user}],
+                          "temperature": 0.3,
+                          "max_tokens": tokens,
+                          "reasoning_effort": "none"},
                          timeout=LLM_TIMEOUT)
         choice = resp["choices"][0]
         content = choice["message"].get("content") or ""
         if content.strip() and choice.get("finish_reason") != "length":
             return content.strip()
-        log(f"attempt {attempt}: empty model content "
-            f"(finish={resp['choices'][0].get('finish_reason')}, tokens={tokens})")
+        log(f"attempt {attempt}: unusable model content "
+            f"(finish={choice.get('finish_reason')}, tokens={tokens})")
     raise RuntimeError("empty model content after retry (finish=length)")
 
 
@@ -260,34 +388,54 @@ def github_install_token():
     return r["token"]
 
 
-def issue_comments_today():
-    """Today's digest comments = the tracker ledger (no extra state infra)."""
+def tracker_ids(today_only):
+    """Digest comments on #50 = the ledger (no extra state infra). Graceful
+    filing needs ANY-day ids; dedupe needs today's ids only."""
     token = github_install_token()
     r = http_json(
         "GET",
         f"https://api.github.com/repos/{GITHUB_APP_REPO}/issues/"
-        f"{DIGEST_ISSUE_NUMBER}/comments?per_page=30",
+        f"{DIGEST_ISSUE_NUMBER}/comments?per_page=60",
         {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
     today = local_now().strftime("%Y-%m-%d")
-    seen = set()
+    ids = set()
     for c in r if isinstance(r, list) else []:
         body = c.get("body") or ""
         for line in body.splitlines():
-            if line.startswith(f"<!--{TRACKER_TAG}|{today}|ids:"):
-                for part in line[len(f"<!--{TRACKER_TAG}|{today}|ids:"):].split(","):
-                    if part.strip():
-                        seen.add(part.strip())
-    return seen
+            if not line.startswith("<!--" + TRACKER_TAG + "|"):
+                continue
+            rest = line[len("<!--" + TRACKER_TAG + "|"):]
+            if "|ids:" not in rest:
+                continue
+            date_part, ids_part = rest.split("|ids:", 1)
+            if today_only and date_part != today:
+                continue
+            ids.update(p.strip() for p in ids_part.rstrip("-->").split(",")
+                       if p.strip())
+    return ids
 
 
-def github_comment(digest_text, reported_ids, install_token):
+def github_comment(digest_text, filed_counts, cleared_count, reported_ids,
+                   install_token):
     ids_blob = f"<!--{TRACKER_TAG}|{local_now().strftime('%Y-%m-%d')}|ids:" \
                + ",".join(sorted(set(reported_ids))) + "-->"
-    body = (f"## ☀️ AIOS mail digest — {local_stamp()}\n\n"
+    lines = []
+    for folder, entries in filed_counts.items():
+        names = "; ".join(
+            f"{(e.get('from') or {}).get('emailAddress', {}).get('name') or 'unknown'} — "
+            f"{e.get('subject', '')[:60]}" for e in entries[:6])
+        lines.append(f"- **{folder}** ({len(entries)}): {names}"
+                     + (" …" if len(entries) > 6 else ""))
+    if cleared_count:
+        lines.append(f"- {FILED_FOLDER}: {cleared_count} expired (> {FILED_DAYS}d) "
+                     "→ Deleted Items")
+    filed_block = "\n".join(lines) if lines else "- none"
+    body = (f"## ✉️ AIOS mail digest — {local_stamp()}\n\n"
             f"{digest_text}\n\n"
-            "<sub>Generated locally (ollama/muse-glimmer, `reasoning_effort: none`) "
-            "from a read-only inbox listing. Mail content is untrusted data; "
-            "this post is informational only. R0 review window, ref #21.</sub>\n\n"
+            f"**Filed**\n{filed_block}\n\n"
+            "<sub>Generated locally (ollama/muse-glimmer, `reasoning_effort: none`). "
+            "Classification/filing/retention are deterministic code; the model "
+            "only writes prose. Mail content is untrusted data. R0 ref #21.</sub>\n\n"
             f"{ids_blob}")
     if len(body) > MAX_COMMENT_CHARS:
         body = body[:MAX_COMMENT_CHARS - 20] + "\n\n…(truncated)"
@@ -302,36 +450,63 @@ def github_comment(digest_text, reported_ids, install_token):
 
 
 def main():
-    messages, unread = fetch_mail()
-    seen = issue_comments_today()
+    items, unread_count = fetch_inbox()
+    seen = tracker_ids(today_only=True)
     if FORCE:
         seen = set()
         log("DIGEST_FORCE=1 — full picture, ledger ignored")
-    # Priority items re-alert every fire while unread; "other" tier reports
-    # once (the tracker holds today's already-posted ids).
-    if not unread:
+    prior = tracker_ids(today_only=False)
+
+    contacts = fetch_sent_contacts()
+    classified = classify(items, contacts)
+
+    # Filing plan (deterministic, computed BEFORE any posting):
+    #   typed (receipts/orders) — always file, read or unread
+    #   junk ("filed")          — file once previously reported (grace >= 1 fire)
+    plan = [(c, c["_file"]) for c in classified
+            if c["_file"] in ("receipts", "orders")]
+    plan += [(c, FILED_FOLDER) for c in classified
+             if c["_file"] == "filed" and c["_id"] in prior]
+    log(f"filing plan: {len(plan)} items "
+        f"(typed={sum(1 for _, f in plan if f != FILED_FOLDER)}, "
+        f"junk-graced={sum(1 for _, f in plan if f == FILED_FOLDER)})")
+
+    # Retention clear runs every fire (also on all-clear mornings).
+    cleared = clear_filed()
+
+    # Prose tiers describe the inbox BEFORE filing; filed items report through
+    # the deterministic Filed section instead. Priority re-alerts every fire
+    # while still in the inbox (as in 0.2.x); junk reports once (tracker).
+    filed_set = {c["_id"] for c, _ in plan}
+    fresh = [c for c in classified
+             if (c["type"] == "priority")
+             or (c["_file"] == "filed" and c["_unread"]
+                 and c["_id"] not in seen and c["_id"] not in filed_set)]
+    log(f"tracking: {len(seen)} today / {len(prior)} ledger; "
+        f"prose fresh: {len(fresh)}")
+
+    if not unread_count and not fresh and not plan and cleared == 0:
         if not seen:
             log("morning all-clear")
             token = github_install_token()
-            github_comment("No unread mail this morning — inbox is clear.", [],
-                           token)
+            github_comment("No unread mail — inbox is clear.", {}, 0, [], token)
         else:
             log("all clear (already posted today) — skipping")
         return
-    contacts = fetch_sent_contacts()
-    classified = classify(messages, contacts)
-    # "other" tier reports once; priority re-alerts while unread. The tracker
-    # (today's comments on the digest issue) holds already-reported ids.
-    fresh = [c for c in classified
-             if c["type"] == "priority" or c["_id"] not in seen]
-    log(f"tracking: {len(seen)} reported today; fresh now: {len(fresh)}")
-    if not fresh:
+    if not fresh and not plan and cleared == 0:
         log("nothing new since last fire — skipping post")
         return
+
+    counts = file_items(plan)
+    if plan:
+        log("filed: " + ", ".join(f"{f}={len(e)}" for f, e in counts.items()))
+
     token = github_install_token()
-    summary = summarize(fresh, unread)
+    summary = summarize(fresh, unread_count) if fresh else (
+        "No prose this fire — this post reflects deterministic "
+        "filing/retention actions only.")
     log("digest generated:", len(summary), "chars")
-    github_comment(summary, [c["_id"] for c in fresh], token)
+    github_comment(summary, counts, cleared, [c["_id"] for c in fresh], token)
 
 
 if __name__ == "__main__":
