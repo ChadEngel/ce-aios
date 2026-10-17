@@ -60,7 +60,10 @@ spec:
                 - name: DIGEST_PROTECTED_DOMAINS
                   value: "engelmn.com,alohamn.com,crookedgate.com"
                 - name: DIGEST_SENT_TOP
-                  value: "50"
+                  # 250: Chad's mail rule protects "anything from a contact";
+                  # a 50-address lookback missed bulk-keep senders (club,
+                  # alerts) during the 2026-10-17 inbox sweep (76 addresses).
+                  value: "250"
                 # Filing tier (Chad, 2026-10-17): folder names + retention +
                 # scan window. Pattern lists are env-tunable regex fragments
                 # (subject + sender-name match). All defaults also live in
