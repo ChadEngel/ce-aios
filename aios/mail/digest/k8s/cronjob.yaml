@@ -35,7 +35,7 @@ spec:
             kubernetes.io/arch: amd64
           containers:
             - name: digest
-              image: caehomelab/aios-mail-digest:0.3.3
+              image: caehomelab/aios-mail-digest:0.3.4
               imagePullPolicy: Never
               envFrom:
                 - secretRef:
@@ -61,6 +61,10 @@ spec:
                 # delivery/service mail must stay visible until resolved).
                 - name: DIGEST_PROTECTED_DOMAINS
                   value: "engelmn.com,alohamn.com,crookedgate.com,warnersstellian.com,warners-stellian.com"
+                # Senders excluded from the sent-contacts "you email this
+                # person" tier (Chad 2026-10-18: ui.com joins removals).
+                - name: DIGEST_CONTACT_EXCLUDES
+                  value: "ui.com"
                 - name: DIGEST_SENT_TOP
                   # 250: Chad's mail rule protects "anything from a contact";
                   # a 50-address lookback missed bulk-keep senders (club,

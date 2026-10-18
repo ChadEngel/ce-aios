@@ -90,3 +90,6 @@ Chad is actively clearing personal data from data-broker sites; their confirmati
 
 ## 2026-10-18 — Warners Stellian protected
 New fridge purchase → active vendor correspondence (order/delivery/service) must stay visible. Added `warnersstellian.com` (+ hyphen variant) to `DIGEST_PROTECTED_DOMAINS` — first commercial sender on the protected list; precedence: protected beats the Orders/Receipts patterns, so a Warners Stellian receipt stays in the inbox too.
+
+## 2026-10-18 — ui.com joins removals
+Ubiquiti (ui.com) correspondence was kept by the sent-contacts tier ("you email this person"). New `DIGEST_CONTACT_EXCLUDES` env: excluded domains fall through to normal junk filing (grace applies). First use: `ui.com`.

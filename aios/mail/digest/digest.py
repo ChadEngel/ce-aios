@@ -66,6 +66,11 @@ PRIORITY_KEYWORDS = [k.strip().lower() for k in os.environ.get(
 PROTECTED_DOMAINS = [d.strip().lower() for d in os.environ.get(
     "DIGEST_PROTECTED_DOMAINS", "").split(",") if d.strip()]
 SENT_TOP = int(os.environ.get("DIGEST_SENT_TOP", "50"))
+# Domains excluded from the sent-contacts tier (ui.com per Chad 2026-10-18):
+# an address you once wrote but whose mail is pure notice/noise still files
+# like junk (grace applies). Keywords/protected tiers are unaffected.
+CONTACT_EXCLUDES = [d.strip().lower() for d in os.environ.get(
+    "DIGEST_CONTACT_EXCLUDES", "").split(",") if d.strip()]
 # Filing config (Chad, 2026-10-17). Patterns are regex FRAGMENTS matched
 # case-insensitively against subject + sender display name ONLY (never the
 # body preview — receipt/order wording inside promo bodies is a false-file
@@ -275,7 +280,9 @@ def classify(messages, sent_contacts):
         # to Priority forever — a feedback loop. Never match on body text.
         blob = " ".join([name.lower(), addr, subject.lower()])
         reason = None
-        if sent_contacts and addr in sent_contacts:
+        if sent_contacts and addr in sent_contacts and not any(
+                addr.endswith("@" + d) or addr.endswith("." + d)
+                for d in CONTACT_EXCLUDES):
             reason = "you email this person"
         else:
             hit = next((k for k in PRIORITY_KEYWORDS if k in blob), None)
