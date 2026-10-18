@@ -320,7 +320,16 @@ def clear_filed():
     Deletes are constrained to the folder-scoped listing of THAT folder and
     age-filtered inside the Graph query. Graph DELETE = soft delete (the
     message lands in Deleted Items, further recoverable) — never a purge.
-    Clears in bounded batches so a large backlog can't blow the MCP timeout."""
+    Clears in bounded batches so a large backlog can't blow the MCP timeout.
+    CIRCUIT-BREAKER: any clear-path failure (e.g. Bifrost's inner transport
+    429) stops the clear immediately and reports the partial count — it must
+    NEVER abort the fire (0.3.1 bug: the batch re-list re-threw and the whole
+    digest died unposted). Deletes are soft (Deleted Items) and the listing
+    is re-fetched each fire, so abort-on-failure is always safe + idempotent.
+
+    Also 429-aware: "Too many requests" anywhere in the error = stop clearing
+    this fire rather than retry-burning (the daemon-side work may already
+    have executed — at-least-once semantics; next fire re-lists and skips)."""
     filed_id = folder_map().get(FILED_FOLDER.lower())
     if not filed_id:
         log(f"retention: {FILED_FOLDER} does not exist yet — nothing to clear")
@@ -332,25 +341,43 @@ def clear_filed():
     # listing blows the 30s MCP timeout and the fire dies mid-clear. Deleting
     # page 1 shifts the list, so re-fetch top=25 each round until empty.
     n_total = 0
+    abort = None
     for _ in range(40):  # cap 40×25 = up to 1000/fire so fires stay bounded
-        data = graph_file("list-mail-folder-messages",
-                          {"mailFolderId": filed_id,
-                           "filter": f"receivedDateTime lt {cutoff}",
-                           "top": 25})
+        try:
+            data = graph_file("list-mail-folder-messages",
+                              {"mailFolderId": filed_id,
+                               "filter": f"receivedDateTime lt {cutoff}",
+                               "top": 25})
+        except Exception as exc:
+            abort = f"batch-list failed after {n_total} clears: {str(exc)[:90]}"
+            break
         items = data.get("value") if isinstance(data, dict) else data
         if not isinstance(items, list):
+            abort = f"unexpected listing shape after {n_total} clears"
             break
         batch = [m for m in items if m.get("id")]
         if not batch:
             break
+        fails = 0
         for m in batch:
             try:
                 graph_file("delete-mail-message", {"messageId": m["id"]})
                 n_total += 1
+                fails = 0
             except Exception as exc:
+                msg = str(exc)
                 log(f"retention: delete failed (skipped this fire) "
-                    f"err={str(exc)[:90]}")
-        time.sleep(0.3)
+                    f"err={msg[:90]}")
+                fails += 1
+                if fails >= 3:
+                    abort = (f"3 consecutive delete failures after "
+                             f"{n_total} clears: {msg[:90]}")
+                    break
+            time.sleep(1.0)  # stay gentle under any rate limiter
+        if abort:
+            break
+    if abort:
+        log(f"retention: ABORTED clear this fire — {abort}")
     log(f"retention: cleared {n_total} items older than {FILED_DAYS}d from "
         f"{FILED_FOLDER}")
     return n_total
@@ -508,8 +535,15 @@ def main():
         f"(typed={sum(1 for _, f in plan if f != FILED_FOLDER)}, "
         f"junk-graced={sum(1 for _, f in plan if f == FILED_FOLDER)})")
 
-    # Retention clear runs every fire (also on all-clear mornings).
-    cleared = clear_filed()
+    # Retention clear runs every fire (also on all-clear mornings). Belt AND
+    # braces: clear_filed is self-guarding; this wrapper guarantees the
+    # digest post always happens no matter what retention did.
+    try:
+        cleared = clear_filed()
+    except Exception as exc:
+        log(f"retention: UNEXPECTED outer failure (digest continues) "
+            f"err={str(exc)[:120]}")
+        cleared = 0
 
     # Prose tiers describe the inbox BEFORE filing; filed items report through
     # the deterministic Filed section instead. Priority re-alerts every fire
