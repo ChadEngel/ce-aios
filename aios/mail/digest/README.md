@@ -40,6 +40,30 @@ Fires at **05:00, 12:00, 17:00 America/Chicago** (`timeZone`-pinned). Each run:
 Wrongly-filed mail can be dragged back in Outlook manually, and the pattern
 lists are env-tunable in the CronJob without a rebuild.
 
+## Privacy in-flight tier (0.3.3, 2026-10-18)
+
+While Chad is actively clearing personal data from broker sites, opt-out /
+removal confirmations come from unpredictable senders — and a filed-away
+confirmation = a silently failed removal. Two layers protect them:
+
+1. **Deterministic**: `PRIVACY_DOMAINS` (known broker/people-search sender
+   domains) plus high-precision subject patterns (`PRIVACY_SUBJECTS`:
+   opt-out, do-not-sell, removal/deletion request|confirmation, etc.).
+   Both env-tunable (`DIGEST_PRIVACY_DOMAINS`, `DIGEST_PRIVACY_SUBJECTS`).
+2. **Model-suggested keeps**: every fire, the model (muse-glimmer) is asked
+   which of the would-be-filed mail looks like data-removal correspondence.
+   **Asymmetry rule: the model can only KEEP mail — its output is mapped to
+   "never file, never delete" and nothing else.** Worst case of a false
+   positive = the mail stays in the inbox (the pre-AIOS safe default); the
+   model can never widen filing. Kept mail is reported in its own
+   "**Privacy (kept in inbox)**" digest section while present.
+
+On model failure the digest **fails safe**: would-be-filed candidates are
+held out of this fire's filing plan and re-checked next fire (they are still
+reported). Toggles: `DIGEST_PRIVACY_KEEP=0` disables the tier entirely;
+`DIGEST_PRIVACY_LLM=0` keeps only the deterministic layer. This is the first
+LLM-influenced classification in the engine and is deliberately one-sided.
+
 ## Two-compartment VK design (R2 promotion, deliberate write grant)
 
 - **Read compartment** (`BIFROST_VK_AIOS_HELPDESK`): prose/listing reads;

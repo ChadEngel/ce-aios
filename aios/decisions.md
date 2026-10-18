@@ -84,3 +84,6 @@ Everything through Infisical (no exceptions); infra work scoped to 192.168.30.0/
 
 ## 2026-08-16 — Pattern identified
 Chad has many good ideas and finishes few, limited by unscheduled free time (full-time job, kid's sports, family). Default to finishing the nearly-done thing; flag competing new threads once.
+
+## 2026-10-18 — Privacy in-flight tier (LLM-assisted, keep-only)
+Chad is actively clearing personal data from data-broker sites; their confirmation emails have unpredictable senders, and an opt-out buried in AIOS-Filed = a failed removal. New digest tier: deterministic broker-domain/subject layer + model-SUGGESTED keeps over would-be-filed mail. ASYMMETRY RULE (first model-influenced classification): the model can only protect mail (suggest → `_file=None`); it can never file, delete, or widen any action. False positive cost = mail stays in inbox (safe default). On model failure: candidates held from the plan this fire, reported, re-checked next fire. Toggleable via `DIGEST_PRIVACY_KEEP` / `DIGEST_PRIVACY_LLM` (0.3.3).
