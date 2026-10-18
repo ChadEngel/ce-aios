@@ -1,6 +1,6 @@
 # Inbox Console — a per-user management UI + appliance for the mail digest
 
-**Status:** PLANNED (design approved as direction 2026-10-17; M0 next).
+**Status:** M0 IN FLIGHT (spec approved + merged PR #59, 2026-10-17; Entra scaffold + OAuth PoC drafted, PR pending; Chad runs `appliance/entra-app.sh`, then the delegated-login PoC gate).
 **Related:** `helpdesk-mail-agent.md` (the live digest agent this manages), `ai-it-team.md` (hire #4), #50 (digest report thread), PR #57 (protected senders + folder-scoped scan), PR #58 (session 9 cont. 6 — the whole-mailbox listing find).
 
 ## 1. Why this exists
