@@ -79,7 +79,12 @@ spec:
                 - name: DIGEST_FILED_DAYS
                   value: "10"
                 - name: DIGEST_SCAN_TOP
-                  value: "50"
+                  # 2026-10-18: 50 → 200. At 50/fire the digest only ever saw
+                  # the newest 50 inbox items — anything buried deeper was
+                  # never listed, never reported (grace), never filed, so the
+                  # backlog ground at ~21/fire. 200 + SCAN_TOP=500 one-off
+                  # catch-up clears it while grace protection still applies.
+                  value: "200"
               resources:
                 requests:
                   memory: 64Mi
