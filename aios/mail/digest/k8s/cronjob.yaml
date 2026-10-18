@@ -56,9 +56,11 @@ spec:
                   value: "bluff creek,ccha,crossbar,bearpath,flag football,cc united"
                 # Protected senders (Chad, 2026-10-17): never filed, never
                 # deleted — family/personal domains stay in the inbox. The
-                # sent-contacts tier is protected by design.
+                # sent-contacts tier is protected by design. 2026-10-18: +
+                # warnersstellian.com (Chad, active fridge purchase — order/
+                # delivery/service mail must stay visible until resolved).
                 - name: DIGEST_PROTECTED_DOMAINS
-                  value: "engelmn.com,alohamn.com,crookedgate.com"
+                  value: "engelmn.com,alohamn.com,crookedgate.com,warnersstellian.com,warners-stellian.com"
                 - name: DIGEST_SENT_TOP
                   # 250: Chad's mail rule protects "anything from a contact";
                   # a 50-address lookback missed bulk-keep senders (club,
