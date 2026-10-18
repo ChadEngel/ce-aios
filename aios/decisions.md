@@ -1,5 +1,13 @@
 # Decision log (AIOS) — newest first. Why we chose X, so nobody re-litigates it.
 
+## 2026-10-17 — Inbox Console: per-user appliance with delegated Entra auth (D1–D7)
+Chad's direction: package the mail-digest manager as a UI + micro VM for any user, Entra login so the setup knows whose mailbox it manages. Design = `roadmap/inbox-console.md`, issue #60. Key calls:
+
+- **Delegated Entra OIDC replaces the Softeria device-code daemon for the appliance** (consistent with the 2026-10-16 "delegated, not app-only" call, different mechanism: per-user interactive login instead of a daemon-shared cache). Public client, PKCE loopback + device-code fallback; scopes exactly `User.Read, Mail.Read, Mail.ReadWrite, Contacts.Read` — **no Mail.Send exists on the registration, so sending is impossible by construction**. `Contacts.Read` closes the sent-folder contact-proxy gap (the Outlook address book was never in the MCP read tools).
+- **Deterministic-only mutations:** the LLM never files/moves/deletes (mail engine = extracted deterministic `digest.py` logic; prompts write prose only). Retention = soft delete to Deleted Items only; the UI cannot express hard delete or send.
+- **One box = one mailbox;** config = versioned YAML + append-only audit journal; per-user secrets in a local encrypted store (self-contained appliance — a deliberate product-scoped deviation from all-secrets-in-Infisical, which stays for the homelab fleet).
+- **Bifrost/VK/GitHub are adapters, not dependencies** (webhook/Pushover defaults; muse-glimmer still the default prose model for Chad). Packaging: container → Quadlet/Packer micro VM (M4). Instance #1 = Chad's cluster; pilot #2 = a second real user before anything generalizes.
+
 ## 2026-10-16 — Helpdesk mail agent: mailbox = primary personal inbox; Softeria/ms-365-mcp-server adopted in HTTP trust-proxy-auth daemon mode
 Chad: "promote to primary now, to get it set up. We will start slow with what it should do." Design (`helpdesk-mail-agent.md`) + T-M1 spike resolved the two open architecture questions:
 
