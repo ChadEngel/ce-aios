@@ -41,6 +41,14 @@ spec:
           env:
             - name: ENABLED_TOOLS
               value: "^(list-mail-messages|list-mail-folder-messages|list-mail-folder-messages-delta|get-mail-message|get-mail-message-mime|get-mail-attachment-content|list-mail-attachments|list-mail-folders|list-mail-child-folders|list-mail-rules|list-outlook-categories|get-mailbox-settings|create-mail-folder|move-mail-message|delete-mail-message)$"
+            # Softeria ships a fixed express-rate-limit on /mcp (120 req/min
+            # per client IP; default message "Too many requests...", status
+            # 429). Single-tenant lab: Bifrost is the ONLY client and the
+            # retention grind legitimately bursts past 120/min — the limiter
+            # only created an at-least-once failure mode (2026-10-18 10:00Z:
+            # every call executed, every caller response 429). Disabled here.
+            - name: MS365_MCP_RATE_LIMIT_DISABLED
+              value: "true"
           ports:
             - containerPort: 3000
               name: http
