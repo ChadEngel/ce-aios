@@ -1,6 +1,6 @@
 # AIOS — Chad Engel Context File
 
-Last updated: 2026-10-11 (rev 7: In-cluster aios-manager deploy unblockers fixed in PR #44; creds live in jarvis-jatg per agent-vs-infra boundary rule; 3 gaps from #43 resolved — operator template hyphens, project scope, real service code; bonus: NetworkPolicy egress lockdown)
+Last updated: 2026-10-17 (rev 8: digest agent LIVE 0.3.x — 3x daily fires, filing tier R2 + bulk inbox sweep + protected-sender rules; whole-mailbox listing bug found/fixed in PR #57; session-log cont. 6)
 Purpose: portable memory for any assistant (Claude, or a local model through Bifrost) working with Chad. Plain markdown, no vendor-specific syntax — paste into Claude Project instructions/knowledge, or an Open WebUI system prompt / knowledge base.
 
 ---
@@ -115,3 +115,10 @@ Prerequisite for every hire: Level 2 (secrets in Infisical, placeholders rotated
 - **Manager Phase 0 = in-session `gh` protocol** (works today, "run the manager"); Phase 1 = `aios-manager` service (poll GitHub issues on cron, act per tier, digest output) — now unblocked, split per #2 comment: Chad = GitHub App (Issues R/W, no webhook) + key into Infisical; assistant = python image + Deployment/InfisicalSecret/NetworkPolicy + VK + Loki routing.
 - **Update 2026-10-04 (later):** Chad confirmed the shop is **Microsoft 365, not Google** and he can create Entra app registrations → Helpdesk agent uses Microsoft Graph. Personal-vs-employer tenant is still unanswered (employer tenant off-limits without policy clearance). Detail now lives in `roadmap/ai-it-team.md`; this folder (`aios/`) is now a multi-file knowledge base — see `README.md` for load order.
 - Update 2026-10-04 (tenant): `engelmn.com` is a personal M365 Business Premium tenant with Teams and "Azure Plan 2" (TBD). Employer tenant is not used.
+
+**Mail digest agent — standing state + Chad's MAIL RULES (2026-10-17):**
+- Digest = `aios/mail/digest` (cronjob `aios-mail-digest`, ns `ai`, fires 05:00/12:00/17:00 CT; report = a comment on ce-aios issue #50; ledger = hidden tracker-tag comment lines). Current image 0.3.1 (sha f9eca738).
+- **Chad's mail rules:** NEVER file/delete mail from `engelmn.com`, `alohamn.com`, `crookedgate.com`, or **anything from a contact** (contact proxy = sent-folder addresses — the Outlook address book is NOT in the 12 read tools). Bulk cleanup scope = inbox only; the rest of the mailbox stays as-is. Protected = Priority tier: stays in the inbox, re-alerts while unread, never filed, never deleted.
+- End-of-sweep state (verified by distinct `internetMessageId`, zero dupes): Inbox 164 kept (all protected/priority) / AIOS-Filed 919 / Receipts 19 / Orders 7. Retention grinds AIOS-Filed at <=1000/fire on a `receivedDateTime` cutoff (10d; folder holds 2014-era mail).
+- Env that IS the mail policy (cronjob; edit + redeploy, no rebuild): `DIGEST_PROTECTED_DOMAINS`, `DIGEST_SENT_TOP=250` (contact lookback — 50 missed most of the sweep's contact set), `DIGEST_PRIORITY_KEYWORDS`, `DIGEST_FILED_DAYS`, folder names, `DIGEST_SCAN_TOP`.
+- **Tool lesson (cost a day):** `list-mail-messages` = `GET /me/messages` = whole MAILBOX newest-first; its `mailbox` argument is silently dropped. Always scope with `list-mail-folder-messages` + the real folder id (`folder_map()`). Folder-tree `totalItemCount` lags heavily after batch moves — audit by listing + distinct ids, not by the tree. Interleaving moves with listing freezes the newest-100 window on ghosts — enumerate-then-move.

@@ -270,3 +270,62 @@ no auto-commenting by design, R0). Digest digest: none. R0 two-week gate
 starts with the 2026-10-17 05:00 America/Chicago fire (first of the new
 cadence); review target vs failure modes 1–6, then R1 (propose-triage-diffs)
 or a delivery-method change (HA companion push as the next option).
+
+## Session 9, cont. 6 (2026-10-17 PM) — filing ladder R2 + bulk inbox sweep + the whole-mailbox find
+
+**Filing tier went live end-to-end (R2).** Ladder: folder grants → real
+receipt move (Venmo "Degler Farm" → `Receipts`, proof item left in inbox) →
+retention dry-run → two fires. Fire 1 (12:00 CT, `DIGEST_FILED_DAYS=0` test)
+correctly started the grind; Fire 2 swept **47 reported junk → AIOS-Filed**.
+Two bugs found by fire 2 and fixed in PR #56: (a) the classifier keyword-matched
+`bodyPreview`, so it promoted the bot's own GitHub notifications to Priority —
+keyword blob narrowed to sender name + address + subject; (b) `clear_filed`
+used unbounded `fetchAllPages` page-merges that would blow the 30s daemon-MCP
+timeout on a backlog — replaced with bounded page-1 batches (top=25,
+refetch-after-delete, cap 40 batches ≈ 1000/fire).
+
+**Chad's mail rules (2026-10-17):** bulk-clean the inbox; NEVER touch mail
+from `engelmn.com`, `alohamn.com`, `crookedgate.com` (typo'd as
+"crokkecgate" then corrected), or **anything from a contact** (contact proxy
+= sent-folder addresses; Outlook address book is not in the 12 read tools —
+flagged). Scope = inbox only, rest of the mailbox is fine. Protected items
+stay in the inbox and were recovered.
+
+**The find (root cause of the week):**
+`@softeria/ms-365-mcp-server`'s `list-mail-messages` = `GET /me/messages` =
+**the entire mailbox** newest-first; its `mailbox: "inbox"` argument is not in
+the tool schema and is silently dropped (verified against npm dist 0.168.0).
+Every digest "inbox scan" was whole-mailbox: AIOS-Filed contents (fresh
+received-times) ranked at the top, got re-classified, and re-moved onto
+themselves. This explains all of the day's anomalies: the "166 vs 213 filed"
+math, fire 2 re-processing its own filed items, and the v1 bulk drain stalling
+at the stale newest-100 window. Folder counters (`totalItemCount`) also lag
+reality after heavy moves — audit by listing and distinct `internetMessageId`,
+never by folder-tree totals.
+
+**Bulk sweep (two-phase pattern, reusable):** phase A = listing-ONLY
+pagination (`list-mail-folder-messages` on the real Inbox id, `skip` pages,
+top=100 — interleaving moves with listing freezes the window on ghost
+entries); phase B = classify + move (retries force fresh MCP sessions via
+`INIT_DONE[vk]=False`; sleep 0.3 between moves). End state, verified by
+distinct `internetMessageId` (zero dupes mailbox-wide): **Inbox 164 kept
+(all protected/priority) · AIOS-Filed 919 · Receipts 19 · Orders 7**. A
+recovery pass first moved 2 contacted items (Kim's-flight thread) back to the
+inbox before the sweep. The keeps include club/alert senders (clubstermail 45,
+cchockey 23, ui.com 15…) — all legitimate under the contact/keyword tiers.
+
+**Protected senders shipped (PR #56 merged on first two commits, remainder →
+PR #57):** `DIGEST_PROTECTED_DOMAINS` env (csv → priority, never
+filed/deleted), cronjob sets the three family domains; **`DIGEST_SENT_TOP`
+50→250** because a 17-address lookback misses most of the sweep's protection
+set (76 addresses). `fetch_inbox()` now uses `list-mail-folder-messages` with
+the real Inbox folder id.
+
+**Deployed:** image 0.3.1 (sha f9eca738) imported on both amd64 workers
+(caelx002/caelx003); CronJob applied with the new env — protection is live
+before the next fire. **Watch:** the retention clear now starts grinding the
+919-item AIOS-Filed (2014-era items; `receivedDateTime` cutoff, ≤1000/fire —
+visibility = the Filed block).
+
+**Ops lesson:** the GitHub App (issues-write only) gets HTTP 403 commenting on
+PULL REQUESTS — PR comments posted via Chad's `gh` instead.
