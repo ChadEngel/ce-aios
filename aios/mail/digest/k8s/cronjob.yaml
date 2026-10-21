@@ -35,7 +35,7 @@ spec:
             kubernetes.io/arch: amd64
           containers:
             - name: digest
-              image: caehomelab/aios-mail-digest:0.3.4
+              image: caehomelab/aios-mail-digest:0.3.6
               imagePullPolicy: Never
               envFrom:
                 - secretRef:
@@ -48,7 +48,10 @@ spec:
                 - name: GITHUB_INSTALLATION_ID
                   value: "168700840"
                 - name: DIGEST_MODEL
-                  value: "ollama/muse-glimmer:latest"
+                  # Chad switched the composer 2026-10-20 after muse-glimmer
+                  # repeatedly burned its budget on reasoning and killed fires
+                  # (6 unposted fires, 2026-10-18..19). Keep live + repo in sync.
+                  value: "ollama/qwen3.8:latest"
                 # Chad's priority tiers (editable without a rebuild; code has
                 # the same default). Comma-separated, lowercase, substring
                 # match on sender name + address + subject only.
@@ -82,6 +85,12 @@ spec:
                   value: "AIOS-Filed"
                 - name: DIGEST_FILED_DAYS
                   value: "10"
+                # Chunk size for the LLM composer. qwen3.8 burns its output
+                # budget on reasoning traces that scale with input size; a big
+                # single call returns empty content (finish=length) and the
+                # fire dies unposted. 40 leaves room for real digest text.
+                - name: DIGEST_CHUNK
+                  value: "40"
                 - name: DIGEST_SCAN_TOP
                   # 2026-10-18: 50 → 200. At 50/fire the digest only ever saw
                   # the newest 50 inbox items — anything buried deeper was
