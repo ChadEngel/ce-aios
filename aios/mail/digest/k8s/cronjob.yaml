@@ -35,7 +35,7 @@ spec:
             kubernetes.io/arch: amd64
           containers:
             - name: digest
-              image: caehomelab/aios-mail-digest:0.3.6
+              image: caehomelab/aios-mail-digest:0.3.7
               imagePullPolicy: Never
               envFrom:
                 - secretRef:
@@ -91,6 +91,15 @@ spec:
                 # fire dies unposted. 40 leaves room for real digest text.
                 - name: DIGEST_CHUNK
                   value: "40"
+                # Delivery exemption (Chad 2026-10-21): GitHub's notification
+                # email for this digest is how Chad reads his updates, so it
+                # stays in the inbox — never filed, never deleted. Kept
+                # silently: priority re-alerts while unread, which would make
+                # the digest narrate its own delivery mail every fire.
+                - name: DIGEST_NOTICE_SENDERS
+                  value: "notifications@github.com"
+                - name: DIGEST_NOTICE_SUBJECTS
+                  value: "AIOS daily mail digest"
                 - name: DIGEST_SCAN_TOP
                   # 2026-10-18: 50 → 200. At 50/fire the digest only ever saw
                   # the newest 50 inbox items — anything buried deeper was

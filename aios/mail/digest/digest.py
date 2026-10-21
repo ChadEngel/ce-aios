@@ -92,6 +92,21 @@ ORDER_PATTERNS = _pats("DIGEST_ORDER_PATTERNS",
                        r"order shipped,shipped:,out for delivery,"
                        r"track your package,package delivered,has shipped")
 
+# Delivery exemption (Chad 2026-10-21): GitHub's own notification email for
+# this digest ("Re: [ChadEngel/ce-aios] ...") is how Chad reads his updates, so
+# it must NEVER be filed or deleted. Matched on sender + subject (never body)
+# for the same reason as every other rule here: GitHub notification mail QUOTES
+# the digest, so a bodyPreview match would catch unrelated GitHub mail too.
+#
+# These are kept SILENTLY (_self_notice, below): they arrive unread, and a
+# plain "priority" classification would re-alert them in every fire forever —
+# the digest narrating its own delivery emails. Priority re-alerts on _unread;
+# the exemption only guarantees "stays in the inbox, never filed".
+DIGEST_NOTICE_SENDERS = [s.strip().lower() for s in os.environ.get(
+    "DIGEST_NOTICE_SENDERS", "notifications@github.com").split(",") if s.strip()]
+DIGEST_NOTICE_SUBJECTS = [s.strip().lower() for s in os.environ.get(
+    "DIGEST_NOTICE_SUBJECTS", "AIOS daily mail digest").split(",") if s.strip()]
+
 # Privacy in-flight tier (Chad 2026-10-18): he is actively clearing personal
 # data from broker sites; their senders/subjects are unpredictable and a
 # filed-away opt-out confirmation = a silently failed removal. Layer 1 here =
@@ -269,11 +284,25 @@ def fetch_sent_contacts():
         return set()
 
 
+def _is_notice(addr, subject):
+    """True for the digest's own delivery mail (GitHub notification email).
+    Sender is matched EXACTLY (or by domain when the env value is a bare
+    domain) — a substring test would let "xnotifications@github.com" through.
+    Subject match is a plain case-insensitive substring."""
+    sender_ok = False
+    for s in DIGEST_NOTICE_SENDERS:
+        sender_ok = (addr == s if "@" in s else addr.endswith("@" + s))
+        if sender_ok:
+            break
+    return sender_ok and any(n in subject.lower()
+                             for n in DIGEST_NOTICE_SUBJECTS)
+
+
 def classify(messages, sent_contacts):
     """Deterministic bucketing; the model only writes prose.
     type:  "priority" (+reason) or "other" — feeds the prose prompt.
     _file: "receipts"/"orders" for typed matches, "filed" for junk, None for
-           priorities (they never leave the inbox)."""
+           priorities (never leave the inbox) and for _self_notice."""
     out = []
     for m in messages:
         frm = (m.get("from") or {}).get("emailAddress", {})
@@ -300,7 +329,11 @@ def classify(messages, sent_contacts):
             elif dom:
                 reason = f"protected sender ({dom})"
         _privacy = None
-        if reason:
+        _self_notice = None
+        if _is_notice(addr, subject):
+            _self_notice = "digest notification (kept in inbox, never filed)"
+            _file = None
+        elif reason:
             _file = None
         else:
             # Privacy layer 1 (deterministic). Runs before the typed folders:
@@ -324,6 +357,7 @@ def classify(messages, sent_contacts):
                 _file = "filed"
         out.append({"type": "priority" if reason else "other",
                     "reason": reason, "_file": _file, "_privacy": _privacy,
+                    "_self_notice": _self_notice,
                     "_id": msg_key(m.get("id")), "_fid": m.get("id"),
                     "_unread": m.get("isRead") is False,
                     "from": m.get("from"),
@@ -759,12 +793,14 @@ def main():
     # while still in the inbox (as in 0.2.x); junk reports once (tracker).
     filed_set = {c["_id"] for c, _ in plan}
     fresh = [c for c in classified
-             if (c["type"] == "priority")
+             if (c["type"] == "priority" and not c.get("_self_notice"))
              or (c.get("_privacy") and c["_unread"] and c["_id"] not in seen)
              or (c["_file"] == "filed" and c["_unread"]
                  and c["_id"] not in seen and c["_id"] not in filed_set)]
+    kept_notices = sum(1 for c in classified if c.get("_self_notice"))
     log(f"tracking: {len(seen)} today / {len(prior)} ledger; "
-        f"prose fresh: {len(fresh)}; privacy: {len(privacy)}")
+        f"prose fresh: {len(fresh)}; privacy: {len(privacy)}; "
+        f"digest notices kept: {kept_notices}")
 
     if (not unread_count and not fresh and not plan and cleared == 0
             and not privacy):
