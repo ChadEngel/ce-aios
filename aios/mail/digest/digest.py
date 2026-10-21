@@ -3,8 +3,9 @@
 
 Flow: list inbox mail through Bifrost's `graph` MCP client (Softeria daemon)
 -> classify DETERMINISTICALLY in code (never by the model) -> summarize the
-prose tiers with the LOCAL muse-glimmer model -> post one comment to the
-digest issue (#50) via the AIOS GitHub App -> file the discarded mail.
+prose tiers with the LOCAL configured model (env DIGEST_MODEL, config store
+when the UI ships) -> post one comment to the digest issue (#50) via the
+AIOS GitHub App -> file the discarded mail.
 
 Chad's filing rules (2026-10-17):
   - order confirmations -> `Orders` folder
@@ -54,6 +55,10 @@ GITHUB_APP_REPO = os.environ.get("GITHUB_APP_REPO", "ChadEngel/ce-aios")
 DIGEST_ISSUE_NUMBER = os.environ["DIGEST_ISSUE_NUMBER"]
 GITHUB_INSTALLATION_ID = os.environ.get("GITHUB_INSTALLATION_ID", "168700840")
 MODEL = os.environ.get("DIGEST_MODEL", "ollama/muse-glimmer:latest")
+# Privacy keep-pass model: same env value today; separable per-user from the
+# config store (cfg.privacy_model, "" = inherit prose_model). Kept distinct
+# so a user can pick a chatty prose model without weakening the keep-pass.
+MODEL_PRIV = None  # set by _apply(); falls back to MODEL until then
 LLM_TIMEOUT = int(os.environ.get("DIGEST_LLM_TIMEOUT", "300"))
 # Messages per LLM call in the digest composer. Thinking-style models burn
 # their output budget on reasoning traces that scale with input size; a big
@@ -146,6 +151,109 @@ BODY_PREVIEW_CHARS = int(os.environ.get("DIGEST_PREVIEW_CHARS", "400"))
 MAX_COMMENT_CHARS = 4000
 TRACKER_TAG = "aios-tracker"
 
+# ---------------------------------------------------------------- engine
+# 0.5.0 — roadmap M1: the deterministic core (config / classify / folder ops /
+# retention) moves to aios/mail/engine, leaving this file as the app-layer
+# adapter (Bifrost MCP transport, GitHub posting, LLM prose, cadence). The
+# engine speaks only a Config and a small graph port; this adapter implements
+# the port over the Bifrost MCP tools. Dependency points one way only.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _p in (_HERE, os.path.dirname(_HERE)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+import engine                       # noqa: E402
+from engine import classify as _eng_classify        # noqa: E402,F401
+from engine import config as _eng_config            # noqa: E402,F401
+from engine import filing as _eng_filing            # noqa: E402,F401
+from engine import retention as _eng_retention      # noqa: E402,F401
+from engine.classify import msg_key  # noqa: E402,F401  (single definition)
+
+CFG_DIR = os.environ.get("DIGEST_STATE_DIR", "/state")
+
+
+class McpGraph:
+    """The Bifrost-MCP adapter implementing the engine's MailGraph port.
+    list_folder returns a plain list of message dicts. Swap this class for a
+    direct-Graph adapter (appliance/OIDC) without touching the engine."""
+
+    def list_folders(self):
+        data = graph_file("list-mail-folders", {"top": 100})
+        return {f["displayName"].lower(): f["id"]
+                for f in (data.get("value") or [])}
+
+    def list_folder(self, folder_id, top, skip=None, filter=None,
+                    orderby=None):
+        args = {"mailFolderId": folder_id, "top": top}
+        if skip is not None:
+            args["skip"] = skip
+        if filter:
+            args["filter"] = filter
+        if orderby:
+            args["orderby"] = orderby
+        data = graph_file("list-mail-folder-messages", args)
+        items = data.get("value") if isinstance(data, dict) else data
+        if not isinstance(items, list):
+            raise RuntimeError(
+                f"unexpected folder listing shape: {str(data)[:200]}")
+        return items
+
+    def create_folder(self, name):
+        graph_file("create-mail-folder", {"body": {"displayName": name}})
+
+    def move(self, message_id, folder_id):
+        graph_file("move-mail-message",
+                   {"messageId": message_id,
+                    "body": {"DestinationId": folder_id}})
+
+    def delete(self, message_id):
+        graph_file("delete-mail-message", {"messageId": message_id})
+
+
+GRAPH = McpGraph()
+_CFG = engine.config.from_env()
+
+
+def _apply(cfg):
+    """Apply a Config to this module's rule globals — the ONE convergence
+    point between the YAML config store and the code. Both legs call this at
+    fire start. With no config.yaml the cfg IS the env-derived one (identical
+    values), so this is a no-op; a file overrides per-key (merge, in
+    engine.config.load) so a minimal file can never silently shrink a knob
+    the manifest deliberately raised."""
+    global _CFG, SCAN_TOP, SENT_TOP, FILED_DAYS, BODY_PREVIEW_CHARS
+    global MODEL, MODEL_PRIV
+    global PRIORITY_KEYWORDS, PROTECTED_DOMAINS, CONTACT_EXCLUDES
+    global RECEIPT_PATTERNS, ORDER_PATTERNS
+    global PRIVACY_ON, PRIVACY_LLM_ON, PRIVACY_DOMAINS, PRIVACY_SUBJECTS
+    global DIGEST_NOTICE_SENDERS, DIGEST_NOTICE_SUBJECTS
+    global ORDERS_FOLDER, RECEIPTS_FOLDER, FILED_FOLDER
+    _CFG = cfg
+    SCAN_TOP, SENT_TOP, FILED_DAYS = cfg.scan_top, cfg.sent_top, cfg.filed_days
+    BODY_PREVIEW_CHARS = cfg.preview_chars
+    PRIORITY_KEYWORDS = list(cfg.priority_keywords)
+    PROTECTED_DOMAINS = list(cfg.protected_domains)
+    CONTACT_EXCLUDES = list(cfg.contact_excludes)
+    RECEIPT_PATTERNS = [re.compile(s, re.I) for s in cfg.receipt_patterns]
+    ORDER_PATTERNS = [re.compile(s, re.I) for s in cfg.order_patterns]
+    PRIVACY_ON, PRIVACY_LLM_ON = cfg.privacy_on, cfg.privacy_llm_on
+    PRIVACY_DOMAINS = list(cfg.privacy_domains)
+    PRIVACY_SUBJECTS = [re.compile(s, re.I) for s in cfg.privacy_subjects]
+    DIGEST_NOTICE_SENDERS = list(cfg.notice_senders)
+    DIGEST_NOTICE_SUBJECTS = list(cfg.notice_subjects)
+    ORDERS_FOLDER, RECEIPTS_FOLDER, FILED_FOLDER = (
+        cfg.orders_folder, cfg.receipts_folder, cfg.filed_folder)
+    MODEL = cfg.prose_model or os.environ.get(
+        "DIGEST_MODEL", "ollama/muse-glimmer:latest")
+    MODEL_PRIV = cfg.privacy_model or MODEL
+    log(f"config: {cfg.version} (source={cfg.source}, "
+        f"prose={MODEL}, privacy={MODEL_PRIV})")
+
+
+def apply_config():
+    cfg = engine.config.load(CFG_DIR, log=log)
+    _apply(cfg)
+    return cfg
+
 try:
     from zoneinfo import ZoneInfo
     TZ = ZoneInfo("America/Chicago")
@@ -162,11 +270,12 @@ def local_stamp():
     return local_now().strftime(f"%Y-%m-%d %H:%M {tzname}")
 
 
-def msg_key(message_id):
-    # Graph message ids share a long same-mailbox prefix — prefix truncation
-    # collapses every message to one key. Hash instead.
-    import hashlib
-    return hashlib.sha1((message_id or "").encode()).hexdigest()[:16] if message_id else ""
+def folder_map():
+    return engine.filing.folder_map(GRAPH)
+
+
+def ensure_folder(name):
+    return engine.filing.ensure_folder(GRAPH, name, log)
 
 
 def log(*a):
@@ -285,99 +394,28 @@ def fetch_sent_contacts():
 
 
 def _is_notice(addr, subject):
-    """True for the digest's own delivery mail (GitHub notification email).
-    Sender is matched EXACTLY (or by domain when the env value is a bare
-    domain) — a substring test would let "xnotifications@github.com" through.
-    Subject match is a plain case-insensitive substring."""
-    sender_ok = False
-    for s in DIGEST_NOTICE_SENDERS:
-        sender_ok = (addr == s if "@" in s else addr.endswith("@" + s))
-        if sender_ok:
-            break
-    return sender_ok and any(n in subject.lower()
-                             for n in DIGEST_NOTICE_SUBJECTS)
+    return engine.classify.Classifier(_CFG)._is_notice(addr, subject)
 
 
 def classify(messages, sent_contacts):
-    """Deterministic bucketing; the model only writes prose.
-    type:  "priority" (+reason) or "other" — feeds the prose prompt.
-    _file: "receipts"/"orders" for typed matches, "filed" for junk, None for
-           priorities (never leave the inbox) and for _self_notice."""
-    out = []
-    for m in messages:
-        frm = (m.get("from") or {}).get("emailAddress", {})
-        addr = (frm.get("address") or "").lower()
-        name = m.get("from", {}).get("emailAddress", {}).get("name") or ""
-        subject = m.get("subject") or ""
-        # Design rule (README/aios-roadmap): keyword matching uses subject +
-        # sender only. bodyPreview would self-reference the bot's own posted
-        # digests (GitHub notification emails quote them) and re-promote them
-        # to Priority forever — a feedback loop. Never match on body text.
-        blob = " ".join([name.lower(), addr, subject.lower()])
-        reason = None
-        if sent_contacts and addr in sent_contacts and not any(
-                addr.endswith("@" + d) or addr.endswith("." + d)
-                for d in CONTACT_EXCLUDES):
-            reason = "you email this person"
-        else:
-            hit = next((k for k in PRIORITY_KEYWORDS if k in blob), None)
-            dom = next((d for d in PROTECTED_DOMAINS
-                        if addr.endswith("@" + d) or addr.endswith("." + d)),
-                       None)
-            if hit:
-                reason = f"matches '{hit}'"
-            elif dom:
-                reason = f"protected sender ({dom})"
-        _privacy = None
-        _self_notice = None
-        if _is_notice(addr, subject):
-            _self_notice = "digest notification (kept in inbox, never filed)"
-            _file = None
-        elif reason:
-            _file = None
-        else:
-            # Privacy layer 1 (deterministic). Runs before the typed folders:
-            # a broker confirmation must never land in Receipts/Orders either.
-            if PRIVACY_ON:
-                pdom = next((d for d in PRIVACY_DOMAINS
-                             if addr.endswith("@" + d) or addr.endswith("." + d)),
-                            None)
-                psub = next((p.pattern for p in PRIVACY_SUBJECTS
-                             if p.search(subject) or p.search(name)), None)
-                if pdom:
-                    _privacy = f"broker sender domain ({pdom})"
-                elif psub:
-                    _privacy = f"privacy subject match ({psub[:40]})"
-            _file = "receipts" if not _privacy and any(
-                p.search(subject) or p.search(name) for p in RECEIPT_PATTERNS) else None
-            if not _privacy and not _file:
-                _file = "orders" if any(
-                    p.search(subject) or p.search(name) for p in ORDER_PATTERNS) else None
-            if not reason and not _privacy and not _file:
-                _file = "filed"
-        out.append({"type": "priority" if reason else "other",
-                    "reason": reason, "_file": _file, "_privacy": _privacy,
-                    "_self_notice": _self_notice,
-                    "_id": msg_key(m.get("id")), "_fid": m.get("id"),
-                    "_received": m.get("receivedDateTime"),
-                    "_unread": m.get("isRead") is False,
-                    "from": m.get("from"),
-                    "subject": subject or "(no subject)",
-                    "preview": (m.get("bodyPreview") or "")[:BODY_PREVIEW_CHARS]})
-    return out
+    """Delegates to the engine classifier (extracted 0.5.0, roadmap M1).
+    ONE source of classification truth for both legs: rules come from _CFG
+    (applied at fire start); the model never classifies."""
+    return engine.classify.Classifier(_CFG).classify(messages, sent_contacts)
 
 
 # ---------------------------------------------------------------- privacy tier
 
 def _chat_small(system, user, tokens=500):
-    """Small robust chat call for structured suggestions (same muse model and
-    read VK as the prose summarize; two attempts for the reasoning flake)."""
+    """Small robust chat call for structured suggestions (the privacy model
+    MODEL_PRIV + read VK; two attempts for the reasoning flake). The model
+    SUGGESTS keeps only — asymmetry rule, it can never file/delete."""
     for attempt, tk in ((1, tokens), (2, tokens * 2)):
         resp = http_json("POST", f"{BIFROST_URL}/v1/chat/completions",
                          {"x-bf-vk": VK,
                           "x-bf-mcp-include-clients": "__none__",
                           "Content-Type": "application/json"},
-                         {"model": MODEL,
+                         {"model": MODEL_PRIV,
                           "messages": [{"role": "system", "content": system},
                                        {"role": "user", "content": user}],
                           "temperature": 0.2,
@@ -451,16 +489,15 @@ def ensure_folder(name):
 
 
 def file_items(plan):
-    """plan = [(entry, folderName)] -> move each; return per-folder lists."""
+    """plan = [(entry, folderName)] -> move each; return per-folder lists.
+    The move primitive lives in engine.filing (port-based, 0.5.0)."""
     if not plan:
         return {}
     folder_ids = {n: ensure_folder(n) for n in {f for _, f in plan}}
     counts = {}
     for c, folder in plan:
         try:
-            graph_file("move-mail-message",
-                       {"messageId": c["_fid"],
-                        "body": {"DestinationId": folder_ids[folder]}})
+            engine.filing.move(GRAPH, c["_fid"], folder_ids[folder])
             counts.setdefault(folder, []).append(c)
         except Exception as exc:
             log(f"file: move failed (retried next fire) id={c['_id']} "
@@ -488,13 +525,8 @@ def clear_filed():
     as CONFIRMEDLY filed. The ledger is the only durable record of what AIOS
     has seen; deleting on folder age alone would happily delete mail whose
     ledger row was lost in an earlier ledger outage — unreported AND deleted,
-    the one unrecoverable failure. When no ledger is present (first run /
-    standalone digest) this gate is skipped, preserving pre-0.4.0 behaviour."""
-    filed_id = folder_map().get(FILED_FOLDER.lower())
-    if not filed_id:
-        log(f"retention: {FILED_FOLDER} does not exist yet — nothing to clear")
-        return 0
-    # Ledger gate (F5): only ever delete ids the ledger CONFIRMS we filed.
+    the one unrecoverable failure. When no ledger is present this gate is
+    skipped, preserving pre-0.4.0 behaviour."""
     confirmed = None
     try:
         import state as ST
@@ -508,59 +540,10 @@ def clear_filed():
     except Exception as exc:
         log(f"retention: ledger gate unavailable ({str(exc)[:80]}) — "
             f"falling back to folder-age only")
-    cutoff = (local_now() - timedelta(days=FILED_DAYS)).strftime(
-        "%Y-%m-%dT%H:%M:00Z")
-    # Bounded page-1 loop, never a merged fetchAllPages crawl: once the folder
-    # holds thousands of aged items (e.g. after a bulk cleanup), a merged
-    # listing blows the 30s MCP timeout and the fire dies mid-clear. Deleting
-    # page 1 shifts the list, so re-fetch top=25 each round until empty.
-    n_total = 0
-    abort = None
-    for _ in range(40):  # cap 40×25 = up to 1000/fire so fires stay bounded
-        try:
-            data = graph_file("list-mail-folder-messages",
-                              {"mailFolderId": filed_id,
-                               "filter": f"receivedDateTime lt {cutoff}",
-                               "top": 25})
-        except Exception as exc:
-            abort = f"batch-list failed after {n_total} clears: {str(exc)[:90]}"
-            break
-        items = data.get("value") if isinstance(data, dict) else data
-        if not isinstance(items, list):
-            abort = f"unexpected listing shape after {n_total} clears"
-            break
-        batch = [m for m in items if m.get("id")]
-        if confirmed is not None:
-            # Never delete something we cannot prove we filed.
-            gated = [m for m in batch if msg_key(m.get("id")) in confirmed]
-            if len(gated) != len(batch):
-                log(f"retention: skipping {len(batch) - len(gated)} item(s) "
-                    f"with no confirmed ledger outcome")
-            batch = gated
-        if not batch:
-            break
-        fails = 0
-        for m in batch:
-            try:
-                graph_file("delete-mail-message", {"messageId": m["id"]})
-                n_total += 1
-                fails = 0
-            except Exception as exc:
-                msg = str(exc)
-                log(f"retention: delete failed (skipped this fire) "
-                    f"err={msg[:90]}")
-                fails += 1
-                if fails >= 3:
-                    abort = (f"3 consecutive delete failures after "
-                             f"{n_total} clears: {msg[:90]}")
-                    break
-            time.sleep(1.0)  # stay gentle under any rate limiter
-        if abort:
-            break
-    if abort:
-        log(f"retention: ABORTED clear this fire — {abort}")
-    log(f"retention: cleared {n_total} items older than {FILED_DAYS}d from "
-        f"{FILED_FOLDER}")
+    # Bounded batch loop, circuit breakers, soft-delete semantics and the
+    # 429-aware abort all live in engine/retention.py (extracted 0.5.0).
+    n_total, _abort = engine.retention.clear_filed(
+        GRAPH, _CFG, confirmed, log, msg_key, local_now)
     return n_total
 
 
@@ -841,7 +824,9 @@ def github_comment(digest_text, filed_counts, cleared_count, reported_ids,
     body = (f"## ✉️ AIOS mail digest — {local_stamp()}\n\n"
             f"{digest_text}\n\n"
             f"**Filed**\n{filed_block}\n\n"
-            "<sub>Generated locally (ollama/muse-glimmer, `reasoning_effort: none`). "
+            "<sub>Generated locally ("
+            + (MODEL or "?").split("/", 1)[-1]
+            + ", `reasoning_effort: none`). "
             "Classification/filing/retention are deterministic code; the model "
             "only writes prose. Mail content is untrusted data. R0 ref #21.</sub>\n\n"
             f"{ids_blob}")
@@ -858,6 +843,11 @@ def github_comment(digest_text, filed_counts, cleared_count, reported_ids,
 
 
 def main():
+    # 0.5.0: config store first — rules (scan window, folders, patterns) come
+    # from the versioned YAML on the state PVC, env defaults underneath. This
+    # must happen BEFORE the listing: with no config.yaml the values equal the
+    # env ones, so this is a no-op until a file exists.
+    apply_config()
     items, unread_count = fetch_inbox()
     seen = tracker_ids(today_only=True)
     if FORCE:

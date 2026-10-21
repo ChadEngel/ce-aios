@@ -81,3 +81,48 @@ The console is the missing management surface. The engine (deterministic classif
 3. Who is pilot instance #2?
 4. Is LAN-only access right for the appliance, or should it also sit behind Tailscale for remote management?
 5. Keep GitHub-issue reports as an adapter only, or retire them once webhook/Pushover cover the home lab?
+
+## 9. UI requirements intake (2026-10-21, Chad)
+
+Two requirements stated directly for the console; both feed the editing
+milestones (M2+) as first-class screens.
+
+**R1 — user-scheduled digests (never hard-coded).** Today the cadence is a
+manifest constant (`0 5,12,17 * * *` America/Chicago on aios-mail-digest).
+Plan: `digest_schedule` + `digest_tz` move INTO the versioned config store,
+consumed by a tiny reconciler that patches the digest CronJob. Design notes:
+- The reconciler runs on the filer's heartbeat (every 5 min): load config,
+  compare CronJob spec vs config, PATCH only on diff. Needs an RBAC Role
+  scoped to exactly `patch`/`update` on `batch/cronjobs: aios-mail-digest`.
+- Fail-safe: patch failure = digest keeps its previous schedule + loud log —
+  a schedule edit can pause a digest, never mail filing/retention.
+- UI: cron expression field + timezone; validation via croniter at save;
+  show the next 5 fires as a preview before saving; guardrails: no more than
+  1 fire/hour and no duplicate minute offsets against the filer heartbeart;
+  D5 journal records the actor for every schedule change.
+- Config-schema note: the fields ship WITH the reconciler only — never inert
+  keys (engine/config.py documents this).
+
+**R2 — per-user LLM connection ("more individualized").** The two model
+knobs are NOW LIVE in the config store (0.5.1): `prose_model` (digest prose,
+digest leg) and `privacy_model` (privacy keep-pass, empty string = inherit
+prose). Both legs log the effective models on the `config:` line and the
+comment footer credits the real model. UI picker requirements:
+- List models from the gateway's `/v1/models` (OpenAI-compatible); show a
+  "what this model does here" panel per field (guidance below).
+- What the model needs to be able to do:
+  * **prose_model** — plain instruct model, OpenAI-compatible
+    `/v1/chat/completions`, context >= 8k tokens (a chunk is 40 items JSON),
+    temperature 0.2-0.3, `reasoning_effort: none`; must REFUSE instructions
+    embedded in mail content (system prompt enforces; mail is untrusted
+    data); no tools/multimodal needed. Output = plain text ~1-4k chars/chunk.
+  * **privacy_model** — same transport; must return ONLY a JSON array of
+    integer indexes (keep list) or an empty list; LOCAL models only (privacy
+    invariant: mail never leaves the cluster); misbehaving/failing models
+    are structurally safe — keep-pass output can only PROTECT mail; failure
+    holds candidates for a later fire (asymmetry rule, D3).
+  * Never a frontier/remote model for either leg; never a model with agentic
+    tool access (the privacy call already denies MCP tools per request).
+- Model choice is per-user: each user's digest gets their own voice/model;
+  the ledger's `cfg` version stamp ties every filing decision to the exact
+  rules+model set in force when it ran.

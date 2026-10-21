@@ -41,6 +41,9 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+_PARENT = os.path.dirname(HERE)
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)  # make `import engine` work (0.5.0)
 
 import state as ST           # noqa: E402
 
@@ -173,7 +176,11 @@ def reconcile():
 
 def main():
     log(f"filer starting (page size {PAGESIZE}, cap {PAGE_MAX})")
-    # --- 0. Crash repair first; never stack a new run on an unresolved gap.
+    # --- 0. Config store (0.5.0): rules from YAML if present, env below. The
+    # digest module's rule globals are updated in place so BOTH legs always
+    # agree with each other and with whatever config version loaded.
+    cfg = D.apply_config()
+    # Crash repair first; never stack a new run on an unresolved gap.
     try:
         reconcile()
     except Exception as exc:
@@ -304,6 +311,8 @@ def _row(c, folder):
     an id would make the ledger a list of ids we can no longer act on."""
     ea = (c.get("from") or {}).get("emailAddress") or {}
     return {"t": "intent", "id": c["_id"], "folder": folder,
+            "cfg": D._CFG.version,  # which rules decided this (explainability;
+            # makes a bad config edit traceable to exactly the items it hit)
             "subject": (c.get("subject") or "")[:160],
             "sender_name": (ea.get("name") or "")[:80],
             "sender_addr": (ea.get("address") or "")[:120],
