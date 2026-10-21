@@ -123,6 +123,30 @@ are unreachable even at the daemon level.
    list (tools/list through each VK, visible in the Bifrost dashboard shows
    the pin); egress netpol unchanged.
 
+## Digest delivery exemption (0.3.7, 2026-10-21)
+
+Chad reads his updates through GitHub's notification email for issue #50 —
+which the filing tier was sweeping into `AIOS-Filed`. The system was filing
+the mail that announced it had run.
+
+`DIGEST_NOTICE_SENDERS` (default `notifications@github.com`) +
+`DIGEST_NOTICE_SUBJECTS` (default `AIOS daily mail digest`) match on sender
+and subject only, never `bodyPreview` — GitHub notification mail **quotes**
+the digest, so a body match would over-match unrelated GitHub mail. Sender
+matching is exact (or domain-wide when the env value is a bare domain like
+`github.com`); a substring test would let `xnotifications@github.com` through.
+
+Matching mail is kept **silently**, not classified priority: it arrives
+unread and priority re-alerts while unread, so a plain priority rule would
+make every fire narrate its own delivery mail forever — the same
+self-referential loop the classifier's no-`bodyPreview` rule already guards
+against. Verified live: `digest notices kept: 5`, zero self-references in
+the prose, 0 filed.
+
+⚠️ This is a **delivery-location** fix, not a delivery guarantee. Any channel
+that lands in this managed mailbox is subject to the filing tier; the
+exemption is scoped to this one sender+subject pair only.
+
 ## Failure modes to watch (R0 review window, ref #21)
 
 - `Failed to acquire token` → login/daemon scope mismatch (login MUST be
