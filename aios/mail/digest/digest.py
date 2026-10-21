@@ -359,6 +359,7 @@ def classify(messages, sent_contacts):
                     "reason": reason, "_file": _file, "_privacy": _privacy,
                     "_self_notice": _self_notice,
                     "_id": msg_key(m.get("id")), "_fid": m.get("id"),
+                    "_received": m.get("receivedDateTime"),
                     "_unread": m.get("isRead") is False,
                     "from": m.get("from"),
                     "subject": subject or "(no subject)",
@@ -481,11 +482,32 @@ def clear_filed():
 
     Also 429-aware: "Too many requests" anywhere in the error = stop clearing
     this fire rather than retry-burning (the daemon-side work may already
-    have executed — at-least-once semantics; next fire re-lists and skips)."""
+    have executed — at-least-once semantics; next fire re-lists and skips).
+
+    LEDGER GATE (F5, 0.4.0): retention may only delete items the ledger records
+    as CONFIRMEDLY filed. The ledger is the only durable record of what AIOS
+    has seen; deleting on folder age alone would happily delete mail whose
+    ledger row was lost in an earlier ledger outage — unreported AND deleted,
+    the one unrecoverable failure. When no ledger is present (first run /
+    standalone digest) this gate is skipped, preserving pre-0.4.0 behaviour."""
     filed_id = folder_map().get(FILED_FOLDER.lower())
     if not filed_id:
         log(f"retention: {FILED_FOLDER} does not exist yet — nothing to clear")
         return 0
+    # Ledger gate (F5): only ever delete ids the ledger CONFIRMS we filed.
+    confirmed = None
+    try:
+        import state as ST
+        if os.path.isdir(ST.STATE_DIR):
+            rows = ST.read_all(since_days=ST.RETENTION_SCAN_DAYS)
+            merged = ST.latest_by_id(rows)
+            confirmed = {mid for mid, r in merged.items()
+                         if ST.is_settled(r) and r.get("folder") == FILED_FOLDER}
+            log(f"retention: ledger gate — {len(confirmed)} confirmed "
+                f"{FILED_FOLDER} item(s) eligible for deletion")
+    except Exception as exc:
+        log(f"retention: ledger gate unavailable ({str(exc)[:80]}) — "
+            f"falling back to folder-age only")
     cutoff = (local_now() - timedelta(days=FILED_DAYS)).strftime(
         "%Y-%m-%dT%H:%M:00Z")
     # Bounded page-1 loop, never a merged fetchAllPages crawl: once the folder
@@ -508,6 +530,13 @@ def clear_filed():
             abort = f"unexpected listing shape after {n_total} clears"
             break
         batch = [m for m in items if m.get("id")]
+        if confirmed is not None:
+            # Never delete something we cannot prove we filed.
+            gated = [m for m in batch if msg_key(m.get("id")) in confirmed]
+            if len(gated) != len(batch):
+                log(f"retention: skipping {len(batch) - len(gated)} item(s) "
+                    f"with no confirmed ledger outcome")
+            batch = gated
         if not batch:
             break
         fails = 0
@@ -694,17 +723,117 @@ def tracker_ids(today_only):
     return ids
 
 
+def ledger_new_since():
+    """Items the FILER has durably recorded that this digest has not reported
+    yet (0.4.0).
+
+    This is the bridge between the two legs. The filer moves mail out of the
+    inbox, so the digest can no longer see it in a folder listing — without
+    this, mail the filer handled would be filed correctly and NEVER summarised.
+    The ledger is the only record that survives the move.
+
+    Returns (entries, first_boot). first_boot=True means there is no prior
+    report cursor: this is either the very first run or the ledger was rebuilt.
+    We then deliberately report NOTHING rather than dumping the entire backlog
+    into one digest — a 400-item first digest is unreadable and would bury the
+    genuinely new mail. The cursor is seeded and normal reporting starts from
+    the next fire.
+    """
+    import state as ST
+    rows = ST.read_all(since_days=ST.RETENTION_SCAN_DAYS)
+    if not rows:
+        return [], False
+    cursor_path = os.path.join(ST.STATE_DIR, "last_digest_report")
+    # Reconcile against what we have ALREADY posted, so a wiped cursor can
+    # never cause a re-report of everything.
+    already = ST.latest_by_id(rows)
+    done = {mid for mid, r in already.items() if r.get("reported")}
+    if not os.path.exists(cursor_path):
+        try:
+            with open(cursor_path, "w", encoding="utf-8") as fh:
+                fh.write(rows[-1].get("ts", "") + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+        except Exception as exc:
+            log(f"ledger cursor seed failed: {str(exc)[:80]}")
+        log("ledger: no report cursor — seeding, not dumping backlog this fire")
+        return [], True
+    try:
+        with open(cursor_path, "r", encoding="utf-8") as fh:
+            since = fh.read().strip()
+    except Exception:
+        since = ""
+    fresh_rows = [r for r in rows if r.get("ts", "") > since]
+    entries = []
+    for r in fresh_rows:
+        if r.get("t") != "outcome" or r.get("reported"):
+            continue
+        if r.get("status") not in ("filed", "keep"):
+            continue
+        entries.append(r)
+    return entries, False
+
+
+def ledger_mark_reported(rows):
+    """Advance the report cursor + flag rows as reported, so the next fire
+    summarises only what arrived since."""
+    import state as ST
+    if not rows:
+        return
+    for r in rows:
+        if r.get("id"):
+            ST.append({"t": "outcome", "id": r.get("id"),
+                       "folder": r.get("folder"), "status": r.get("status"),
+                       "reported": True})
+    last_ts = max((r.get("ts", "") for r in rows), default=None)
+    if last_ts:
+        path = os.path.join(ST.STATE_DIR, "last_digest_report")
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(last_ts + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+        except Exception as exc:
+            log(f"cursor advance failed: {str(exc)[:80]}")
+
+
+def ledger_to_classified(entries):
+    """Adapt ledger rows back into the shape summarize()/github_comment()
+    expect, so the digest needs only ONE prose code path whether the mail came
+    from a live inbox listing (still in the inbox) or from the filer ledger
+    (already moved). Without this the two legs would drift apart.
+    """
+    out = []
+    for r in entries:
+        ea = {"name": r.get("sender_name") or "unknown",
+              "address": r.get("sender_addr") or ""}
+        out.append({"type": r.get("tier") or "other",
+                    "reason": r.get("reason"),
+                    "from": {"emailAddress": ea},
+                    "subject": r.get("subject") or "(no subject)",
+                    "preview": r.get("preview") or "",
+                    "_file": r.get("folder"), "_privacy": r.get("privacy"),
+                    "_self_notice": r.get("self_notice"),
+                    "_id": r.get("id"), "_unread": bool(r.get("unread"))})
+    return out
+
+
 def github_comment(digest_text, filed_counts, cleared_count, reported_ids,
                    install_token):
     ids_blob = f"<!--{TRACKER_TAG}|{local_now().strftime('%Y-%m-%d')}|ids:" \
                + ",".join(sorted(set(reported_ids))) + "-->"
     lines = []
     for folder, entries in filed_counts.items():
-        names = "; ".join(
-            f"{(e.get('from') or {}).get('emailAddress', {}).get('name') or 'unknown'} — "
-            f"{e.get('subject', '')[:60]}" for e in entries[:6])
-        lines.append(f"- **{folder}** ({len(entries)}): {names}"
-                     + (" …" if len(entries) > 6 else ""))
+        if isinstance(entries, int):
+            names = ""
+        else:
+            names = "; ".join(
+                f"{(e.get('from') or {}).get('emailAddress', {}).get('name') or 'unknown'} — "
+                f"{e.get('subject', '')[:60]}" for e in entries[:6])
+        count = entries if isinstance(entries, int) else len(entries)
+        lines.append(f"- **{folder}** ({count}): {names}"
+                     + (" …" if not isinstance(entries, int)
+                        and len(entries) > 6 else ""))
     if cleared_count:
         lines.append(f"- {FILED_FOLDER}: {cleared_count} expired (> {FILED_DAYS}d) "
                      "→ Deleted Items")
@@ -738,6 +867,29 @@ def main():
 
     contacts = fetch_sent_contacts()
     classified = classify(items, contacts)
+
+    # --- Ledger hand-off from the filer (0.4.0) -----------------------
+    # The filer runs every 5 min and MOVES mail out of the inbox, so anything
+    # it handled is invisible to the inbox listing above. Without this the
+    # digest would report only what the filer had not yet touched, and mail
+    # filed minutes ago would never be summarised at all. The ledger is the
+    # only record that survives the move.
+    ledger_entries, seeding = ledger_new_since()
+    ledger_cls = ledger_to_classified(ledger_entries)
+    ledger_filed = {}
+    for r in ledger_entries:
+        if r.get("folder") and r.get("folder") != "keep":
+            ledger_filed.setdefault(r["folder"], []).append(r)
+    if ledger_cls:
+        log(f"ledger: {len(ledger_cls)} item(s) new since last digest "
+            f"({sum(len(v) for v in ledger_filed.values())} filed by the filer)")
+        # Filer-filed items are already reported-by-being-filed; merge them in
+        # as prose fodder but never let them enter the digest's OWN filing plan
+        # (they are not in the inbox any more).
+        for c in ledger_cls:
+            c["_file"] = None
+            c["_filed_by_filer"] = r_folder = c.get("_file")
+        classified = ledger_cls + classified
 
     # Privacy in-flight tier. Layer 1 (deterministic) is already stamped by
     # classify(); layer 2 = model-suggested keeps over the would-be-filed set.
@@ -818,6 +970,12 @@ def main():
     counts = file_items(plan)
     if plan:
         log("filed: " + ", ".join(f"{f}={len(e)}" for f, e in counts.items()))
+    # Fold in what the filer already moved (5-min leg), so the Filed block
+    # reflects BOTH legs rather than only what this 3x/day fire moved.
+    for folder, rows_ in ledger_filed.items():
+        if folder not in counts:
+            counts[folder] = []
+        counts[folder].extend(rows_)
 
     token = github_install_token()
     if fresh or privacy:
@@ -827,6 +985,15 @@ def main():
                   "filing/retention actions only."
     log("digest generated:", len(summary), "chars")
     github_comment(summary, counts, cleared, [c["_id"] for c in fresh], token)
+    # Mark the filer's rows reported and advance the cursor LAST, so a crash
+    # anywhere above causes a re-report rather than a silent skip.
+    if ledger_entries:
+        try:
+            ledger_mark_reported(ledger_entries)
+            log(f"ledger: marked {len(ledger_entries)} item(s) reported")
+        except Exception as exc:
+            log(f"ledger: report marking FAILED (may re-report next fire): "
+                f"{str(exc)[:100]}")
 
 
 if __name__ == "__main__":

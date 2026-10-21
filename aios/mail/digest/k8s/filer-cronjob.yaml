@@ -1,0 +1,119 @@
+# AIOS mail FILER — the every-5-minutes leg (0.4.0).
+#
+# Files new mail as it arrives; the digest (aios-mail-digest, 3x/day) handles
+# summarising + retention. They are separate jobs because they have different
+# cadences and different failure modes:
+#   filer  = high frequency, stateless-ish, must never lose mail, no LLM summary
+#   digest = low frequency, does the LLM prose + retention deletes
+#
+# Concurrency Forbid is load-bearing: two concurrent filers racing on the same
+# inbox would both page the same window and move items twice (at-least-once
+# from the mailbox's perspective, duplicate effort from ours). The write-ahead
+# ledger makes that recoverable, but there is no reason to allow it.
+#
+# startingDeadlineSeconds 240: with a 5-minute cadence, a missed slot that is
+# an hour late is not worth running late — the next fire picks up the same mail.
+# Cadence is the recovery mechanism; stacking up runs is not.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: aios-mail-filer
+  namespace: ai
+  labels:
+    app.kubernetes.io/name: aios-mail-filer
+    app.kubernetes.io/part-of: aios
+spec:
+  schedule: "*/5 * * * *"
+  timeZone: America/Chicago
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 240
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app: aios-mail-filer
+        spec:
+          restartPolicy: Never
+          # amd64 workers only: the image is imported node-locally
+          # (imagePullPolicy: Never). Keep the tag identical on BOTH workers.
+          nodeSelector:
+            kubernetes.io/arch: amd64
+          containers:
+            - name: filer
+              image: caehomelab/aios-mail-digest:0.4.0
+              imagePullPolicy: Never
+              command: ["python3", "/app/filer.py"]
+              envFrom:
+                - secretRef:
+                    name: aios-mail-digest-secrets
+              env:
+                - name: BIFROST_URL
+                  value: "https://llm.caehomelab.com"
+                # digest.py reads these at import time, and the filer imports
+                # digest.py for the shared classifier — so the filer must supply
+                # them even though it never posts to GitHub.
+                - name: DIGEST_ISSUE_NUMBER
+                  value: "50"
+                - name: GITHUB_INSTALLATION_ID
+                  value: "168700840"
+                - name: DIGEST_MODEL
+                  value: "ollama/qwen3.8:latest"
+                # Shared RWX ledger. Both legs read AND write it.
+                - name: DIGEST_STATE_DIR
+                  value: "/state"
+                # Must match the digest leg exactly — one source of truth for
+                # classification. Drift here = filer files what the digest
+                # would have kept (or vice versa).
+                - name: DIGEST_PRIORITY_KEYWORDS
+                  value: "bluff creek,ccha,crossbar,bearpath,flag football,cc united"
+                - name: DIGEST_PROTECTED_DOMAINS
+                  value: "engelmn.com,alohamn.com,crookedgate.com,warnersstellian.com,warners-stellian.com"
+                - name: DIGEST_CONTACT_EXCLUDES
+                  value: "ui.com"
+                - name: DIGEST_NOTICE_SENDERS
+                  value: "notifications@github.com"
+                - name: DIGEST_NOTICE_SUBJECTS
+                  value: "AIOS daily mail digest"
+                - name: DIGEST_SENT_TOP
+                  value: "250"
+                - name: DIGEST_ORDERS_FOLDER
+                  value: "Orders"
+                - name: DIGEST_RECEIPTS_FOLDER
+                  value: "Receipts"
+                - name: DIGEST_FILED_FOLDER
+                  value: "AIOS-Filed"
+                # Full page-through, no window cap (Chad: nothing may be missed).
+                - name: FILER_PAGE_SIZE
+                  value: "100"
+                - name: FILER_MOVE_SLEEP
+                  value: "0.35"
+              volumeMounts:
+                - name: state
+                  mountPath: /state
+                  readOnly: false
+              resources:
+                requests:
+                  memory: 64Mi
+                  cpu: 25m
+                limits:
+                  # Headroom for the full page-through + move loop; the filer is
+                  # bursty and a tight limit here shows up as MCP timeouts.
+                  memory: 384Mi
+                  cpu: 400m
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 65534
+                runAsGroup: 65534
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                seccompProfile:
+                  type: RuntimeDefault
+          volumes:
+            - name: state
+              persistentVolumeClaim:
+                claimName: aios-mail-state

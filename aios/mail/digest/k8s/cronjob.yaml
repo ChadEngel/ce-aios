@@ -35,7 +35,7 @@ spec:
             kubernetes.io/arch: amd64
           containers:
             - name: digest
-              image: caehomelab/aios-mail-digest:0.3.7
+              image: caehomelab/aios-mail-digest:0.4.0
               imagePullPolicy: Never
               envFrom:
                 - secretRef:
@@ -43,6 +43,11 @@ spec:
               env:
                 - name: BIFROST_URL
                   value: "https://llm.caehomelab.com"
+                # Shared RWX ledger: the digest READS what the filer recorded
+                # (0.4.0). Without this mount the digest cannot see mail the
+                # filer already moved and would report nothing new.
+                - name: DIGEST_STATE_DIR
+                  value: "/state"
                 - name: DIGEST_ISSUE_NUMBER
                   value: "50"
                 - name: GITHUB_INSTALLATION_ID
@@ -107,6 +112,12 @@ spec:
                   # backlog ground at ~21/fire. 200 + SCAN_TOP=500 one-off
                   # catch-up clears it while grace protection still applies.
                   value: "200"
+              volumeMounts:
+                # The digest writes to the ledger too (marks rows reported +
+                # advances the report cursor), so this is read-write.
+                - name: state
+                  mountPath: /state
+                  readOnly: false
               resources:
                 requests:
                   memory: 64Mi
@@ -122,3 +133,7 @@ spec:
                 readOnlyRootFilesystem: true
                 seccompProfile:
                   type: RuntimeDefault
+          volumes:
+            - name: state
+              persistentVolumeClaim:
+                claimName: aios-mail-state

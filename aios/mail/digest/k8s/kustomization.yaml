@@ -3,5 +3,7 @@ kind: Kustomization
 namespace: ai
 resources:
   - infisical-secret-sync.yaml
+  - state-pvc.yaml
   - networkpolicy.yaml
   - cronjob.yaml
+  - filer-cronjob.yaml

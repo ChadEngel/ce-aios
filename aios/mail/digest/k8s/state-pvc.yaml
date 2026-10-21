@@ -1,0 +1,25 @@
+# Shared durable ledger for the mail filer + digest legs (Chad 2026-10-21,
+# "nothing may be missed").
+#
+# RWX on nfs-client is REQUIRED, not a preference: the filer (every 5 min) and
+# the digest (3x/day) are separate pods that schedule onto different nodes, and
+# the digest must read what the filer wrote. local-path (the cluster default) is
+# RWO/node-local — it would hand each pod its own private copy and silently
+# split the ledger in two. nfs-client is the established pattern here
+# (postgres-backup, grafana, loki all use it).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: aios-mail-state
+  namespace: ai
+  labels:
+    app.kubernetes.io/name: aios-mail-state
+    app.kubernetes.io/part-of: aios
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: nfs-client
+  volumeMode: Filesystem
