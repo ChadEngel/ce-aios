@@ -149,6 +149,34 @@ def unresolved_intents(rows=None):
     return [i for mid, i in intents.items() if mid not in done]
 
 
+def _backup_ledger():
+    """Rolling one-iteration backup: ledger.jsonl -> ledger-prev.jsonl.
+
+    Incident 2026-10-21: the whole state volume was deleted/recreated around
+    the 0.5.x rollout and the archiveOnDelete=false nfs-client StorageClass
+    erased the historic ledger with it. compact() is the ledger's only
+    rewriter, so it now preserves a full copy of whatever is on disk BEFORE
+    every rewrite — a future wipe of the live ledger then loses at most one
+    compaction interval, not the trail. Best effort: a failed backup must
+    never abort compaction (mail filing outranks the audit copy).
+    """
+    try:
+        if os.path.exists(LEDGER):
+            with open(LEDGER, "rb") as src:
+                data = src.read()
+            fd, tmp = tempfile.mkstemp(dir=STATE_DIR, prefix=".ledger-bk-",
+                                       suffix=".tmp")
+            with os.fdopen(fd, "wb") as dst:
+                dst.write(data)
+                dst.flush()
+                os.fsync(dst.fileno())
+            bk = os.path.join(STATE_DIR, "ledger-prev.jsonl")
+            os.replace(tmp, bk)
+    except Exception as exc:
+        print(f"[state] WARNING: ledger backup failed ({str(exc)[:80]})",
+              flush=True)
+
+
 def compact(min_days=None):
     """Compact the ledger to one row per id, oldest-first by first-seen.
 
@@ -166,6 +194,7 @@ def compact(min_days=None):
     """
     min_days = RETENTION_SCAN_DAYS if min_days is None else min_days
     rows = read_all(since_days=min_days)
+    _backup_ledger()
     first_ts, merged = {}, {}
     for row in rows:
         mid = row.get("id")

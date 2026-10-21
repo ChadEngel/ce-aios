@@ -5,5 +5,6 @@ resources:
   - infisical-secret-sync.yaml
   - state-pvc.yaml
   - networkpolicy.yaml
+  - rules-configmap.yaml
   - cronjob.yaml
   - filer-cronjob.yaml

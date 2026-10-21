@@ -127,5 +127,25 @@ with open(ST.LEDGER) as fh:
 check("row is valid JSON on disk, greppable",
       line["id"] == "h1" and line["t"] == "intent", line)
 
+print("== 9. rolling backup before compaction (incident 2026-10-21) ==")
+reset()
+for i in range(3):
+    ST.append({"t": "intent", "id": f"b{i}", "folder": "keep"})
+ST.append({"t": "outcome", "id": "b0", "status": "keep", "folder": "keep"})
+with open(ST.LEDGER) as fh:
+    before = fh.read()
+n = ST.compact()
+bk = os.path.join(ST.STATE_DIR, "ledger-prev.jsonl")
+with open(bk) as fh:
+    backed = fh.read()
+check("backup captures pre-compaction ledger", backed == before
+      and len(backed.strip().splitlines()) == 4)
+check("compaction merged same ids", n == 3, n)
+reset()
+ST.compact()   # compact on an empty ledger must still succeed
+check("empty-ledger compaction ok",
+      not os.path.exists(ST.LEDGER) or
+      open(ST.LEDGER).read().strip() == "")
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

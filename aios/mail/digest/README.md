@@ -37,8 +37,11 @@ Fires at **05:00, 12:00, 17:00 America/Chicago** (`timeZone`-pinned). Each run:
    they remain recoverable. Deletes are constrained to the folder-scoped
    listing of `AIOS-Filed` and age-filtered inside the Graph query.
 
-Wrongly-filed mail can be dragged back in Outlook manually, and the pattern
-lists are env-tunable in the CronJob without a rebuild.
+Wrongly-filed mail can be dragged back in Outlook manually. The pattern lists
+are env-tunable — as of 0.5.3 the rule values live in ONE object:
+`k8s/rules-configmap.yaml` (ConfigMap `aios-mail-rules`), which the digest,
+filer, and console all `envFrom` — a rule is edited in one file (no rebuild)
+and all three legs derive the identical config version byte-for-byte.
 
 ## Privacy in-flight tier (0.3.3, 2026-10-18)
 
@@ -82,6 +85,17 @@ Send/draft/reply/forward/rule/folder-delete/attachment verbs and `graph-batch`
 are unreachable even at the daemon level.
 
 ## Deploy checklist (ordered)
+
+0. **State volume rule — the PVC that backs `/state` is never deleted or
+   recomputed.** Incident 2026-10-21: in the 0.5.x rollout the state PVC was
+   deleted and recreated (new uid 14:23:24Z); the `nfs-client` StorageClass
+   has `archiveOnDelete: "false"`, so its historic ledger, config journal,
+   and cursor were erased beyond recovery. Mail itself was untouched and
+   every safety gate degraded the SAFE way (items not provably ledger-
+   confirmed are skipped by retention forever), but the audit trail predating
+   Oct 21 14:23Z is gone. Compensations now shipped: `state.compact()` keeps
+   a rolling `ledger-prev.jsonl` copy before every rewrite (self-tested),
+   and volume lifecycle edits are off-limits for this PVC.
 
 1. **Build the image (amd64 — workers run it):**
    `docker buildx build --platform linux/amd64 --load -t caehomelab/aios-mail-digest:0.4.0 aios/mail/digest/`

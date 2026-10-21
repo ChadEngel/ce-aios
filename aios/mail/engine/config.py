@@ -104,7 +104,11 @@ class Config:
         empty folder names, patterns must compile as regex fragments."""
         for f in fields(self):
             v = getattr(self, f.name)
-            if f.type in ("int", float) and isinstance(v, int):
+            # annotations may arrive as real type objects OR strings
+            # depending on the runtime — handle both (the ("int", float)
+            # form silently matched NEITHER in 0.5.x; caught by the console
+            # selftest 2026-10-21).
+            if f.type in (int, float, "int", "float") and isinstance(v, int):
                 if v < 0:
                     raise ValueError(f"{f.name} cannot be negative (destructive)")
         for k in ("filed_folder", "receipts_folder", "orders_folder"):

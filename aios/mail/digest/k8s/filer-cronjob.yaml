@@ -45,12 +45,14 @@ spec:
             kubernetes.io/arch: amd64
           containers:
             - name: filer
-              image: caehomelab/aios-mail-digest:0.5.2
+              image: caehomelab/aios-mail-digest:0.5.3
               imagePullPolicy: Never
               command: ["python3", "/app/filer.py"]
               envFrom:
                 - secretRef:
                     name: aios-mail-digest-secrets
+                - configMapRef:
+                    name: aios-mail-rules
               env:
                 - name: BIFROST_URL
                   value: "https://llm.caehomelab.com"
@@ -61,41 +63,6 @@ spec:
                   value: "50"
                 - name: GITHUB_INSTALLATION_ID
                   value: "168700840"
-                - name: DIGEST_MODEL
-                  value: "ollama/qwen3.8:latest"
-                # Shared RWX ledger. Both legs read AND write it.
-                - name: DIGEST_STATE_DIR
-                  value: "/state"
-                # Must match the digest leg exactly — one source of truth for
-                # classification. Drift here = filer files what the digest
-                # would have kept (or vice versa).
-                - name: DIGEST_PRIORITY_KEYWORDS
-                  value: "bluff creek,ccha,crossbar,bearpath,flag football,cc united"
-                - name: DIGEST_PROTECTED_DOMAINS
-                  value: "engelmn.com,alohamn.com,crookedgate.com,warnersstellian.com,warners-stellian.com"
-                - name: DIGEST_CONTACT_EXCLUDES
-                  value: "ui.com"
-                - name: DIGEST_NOTICE_SENDERS
-                  value: "notifications@github.com"
-                - name: DIGEST_NOTICE_SUBJECTS
-                  value: "AIOS daily mail digest"
-                - name: DIGEST_SENT_TOP
-                  value: "250"
-                # 0.5.1 - also present in these two so BOTH legs derive the
-                # SAME config version (explainability: one rules hash across
-                # the digest and filer logs). The filer ignores scan_top (it
-                # pages to exhaustion by design) and filed_days (never
-                # deletes); they exist here only for rule-identity parity.
-                - name: DIGEST_SCAN_TOP
-                  value: "200"
-                - name: DIGEST_FILED_DAYS
-                  value: "10"
-                - name: DIGEST_ORDERS_FOLDER
-                  value: "Orders"
-                - name: DIGEST_RECEIPTS_FOLDER
-                  value: "Receipts"
-                - name: DIGEST_FILED_FOLDER
-                  value: "AIOS-Filed"
                 # Full page-through, no window cap (Chad: nothing may be missed).
                 - name: FILER_PAGE_SIZE
                   value: "100"

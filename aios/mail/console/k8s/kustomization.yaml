@@ -1,0 +1,8 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ai
+resources:
+  - console.yaml
+# NOTE: envFrom references ConfigMap aios-mail-rules by NAME; that object is
+# owned/deployed by ../digest/k8s (rule identity across legs lives THERE —
+# do not fork a copy here).

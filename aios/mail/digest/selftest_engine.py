@@ -94,6 +94,15 @@ check("warning was loud", any("unreadable" in s for s in logs), logs)
 check("destructive value never applied", cfg3.filed_days == int(
     os.environ.get("DIGEST_FILED_DAYS", "10")))
 
+print("== 3b. negative ints are refused by validate (regression: 0.5.x "
+      "validate guard matched neither str nor type-object int) ==")
+for neg in ({"filed_days": -3}, {"scan_top": -1}, {"digest_days": -2}):
+    try:
+        ECFG.from_dict(neg, source="file")
+        check(f"refuse {neg}", False, "accepted destructive value")
+    except ValueError:
+        check(f"refuse {neg}(ValueError)", True)
+
 print("== 5. classifier fixtures (0.4.x parity) ==")
 base = ECFG.from_dict({
     "priority_keywords": ["bluff creek", "crossbar"],

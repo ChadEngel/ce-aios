@@ -1,6 +1,11 @@
 # Inbox Console — a per-user management UI + appliance for the mail digest
 
-**Status:** M0 IN FLIGHT (spec approved + merged PR #59, 2026-10-17; Entra scaffold + OAuth PoC drafted, PR pending; Chad runs `appliance/entra-app.sh`, then the delegated-login PoC gate).
+**Status:** M1 DONE (engine extracted + shipped 0.5.0→0.5.2, 2026-10-21 —
+see `helpdesk-mail-agent.md` M1 notes). Read-only console + dry-run preview
+SHIPPED 0.6.0, 2026-10-22 (steps 3–4 of the build order: config store ✅ →
+cfg-version stamps ✅ → dry-run preview ✅ → read-only UI ✅ → editing LAST).
+**INCIDENT 2026-10-21 14:23Z** recorded in §11 (state PVC deleted/recreated
+in the 0.5.x rollout; historic ledger unrecoverable; mail untouched).
 **Related:** `helpdesk-mail-agent.md` (the live digest agent this manages), `ai-it-team.md` (hire #4), #50 (digest report thread), PR #57 (protected senders + folder-scoped scan), PR #58 (session 9 cont. 6 — the whole-mailbox listing find).
 
 ## 1. Why this exists
@@ -126,3 +131,62 @@ comment footer credits the real model. UI picker requirements:
 - Model choice is per-user: each user's digest gets their own voice/model;
   the ledger's `cfg` version stamp ties every filing decision to the exact
   rules+model set in force when it ran.
+
+## 10. Read-only console shipped (0.6.0, 2026-10-22) + incident
+
+`aios/mail/console/` — `caehomelab/aios-mail-console:0.6.0`, NodePort 30080
+in ns `ai`, HTTP Basic (secret `aios-console-auth`), one deployment:
+- **Boundaries (D3/D7, enforced in code + manifest):** ZERO mutation
+  endpoints; `/state` mounted readOnly; console touches ONLY the ledger via
+  the same `state.py` the legs run, and ONLY the engine classifier
+  (`engine.classify`) — one source of truth with the fires. Never GitHub,
+  never the LLM, never Graph.
+- **`GET /api/state`** (auth): ledger truth (items / in-inbox estimate /
+  filed-by-folder / unresolved / awaiting-report), effective rules with
+  PROVENANCE per key (`file` = config.yaml actually changes the env value,
+  `env` = manifest, `default` = engine default), models in use, D5 journal,
+  fire status via in-cluster read-only ServiceAccount (Role = get/list
+  batch only; API endpoint pinned to the k3s server via `CONSOLE_K8S_URL`).
+- **`POST /api/dryrun`** (auth, pure compute — writes NOTHING): a
+  hypothetical config (validated; unknown keys/destructive values → 400)
+  classified against the newest ledger items and diffed vs CURRENT rules;
+  grouped "from → to" with sample subjects. The contacts tier is excluded
+  (needs live sent-folder data the ledger doesn't carry) — shown in the UI.
+- **Editing is deliberately ABSENT** (build-order step 5, ships after this
+  console is proven true over a live window).
+- Self-tests offline: `selftest_console.py` (20 checks; includes a proof the
+  state dir is BYTE-IDENTICAL around every preview), engine 33 (incl. new
+  negative-int regression), state 21 (incl. new rolling-backup check).
+
+**Rule identity across legs is now STRUCTURAL:** ConfigMap
+`aios-mail-rules` (digest/k8s/rules-configmap.yaml) is envFrom'd by the
+digest CronJob, the filer, AND the console — the legs' duplicated literal
+rule env blocks were removed (values moved over VERBATIM; live config
+version v6635667ca6 unchanged). A fourth consumer without the envFrom
+visibly diverges on the console's version chip.
+
+### §11 Incident: state PVC deleted/recreated, 2026-10-21 14:23Z
+
+**What:** during the 0.5.x rollout the `aios-mail-state` PVC was deleted and
+recreated (new uid 14:23:24Z; no apply in repo recreates it — the deletion
+was a rollout-process failure, unrecorded at the time). The `nfs-client`
+StorageClass has `archiveOnDelete: "false"`, so the provisioner ERASED the
+volume's historic contents (ledger.jsonl, config-journal.jsonl, cursor).
+Earliest surviving ledger row: 2026-10-21T14:26:38Z.
+**Blast radius (never-miss invariant):** MAIL AND FOLDERS WERE NEVER TOUCHED
+— filing state lives in the mailbox, not the ledger. Every safety gate
+failed SAFE: unconfirmed items are skipped by retention clearing forever
+(F5 gate), lost outcome-rows made old filed items LESS deletable, not more.
+Lost: the pre-Oct-21 audit/explain history; keeps re-announced in the first
+post-wipe digest (cursor re-seeded, marked reported by that fire).
+**Compensations shipped:** (1) `state.compact()` now preserves a rolling
+`ledger-prev.jsonl` copy of the ledger BEFORE every rewrite (self-tested;
+a future wipe loses at most one compaction interval, not the trail —
+compact() is the ledger's only rewriter); (2) volume lifecycle edits on
+this PVC are off-limits; (3) the ledger-check/inspection procedure includes
+checking the PVC uid is UNCHANGED.
+**Not done (deliberate):** mass-rebuilding confirmations for the pre-wipe
+filed items (e.g. the ~20 Receipts) — that would ARM retention clearing on
+mail whose rules-era provenance we can no longer prove; decided against.
+A read-only reconciler could RESTORE audit rows (intent+outcome marked
+`cfg: rebuilt`) WITHOUT the reported/confirm semantics if ever wanted.
