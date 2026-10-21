@@ -664,7 +664,20 @@ def summarize(classified, unread_count, privacy=None):
     if pprose:
         muser += ("\nPrivacy list (kept in inbox, do not file):\n```json\n"
                   + json.dumps(pprose, ensure_ascii=False) + "\n```")
-    return _chat(system, muser, "merge-call")
+    # Merge is pure formatting — the CONTENT already exists in the partials.
+    # When the model can't produce it (qwen3.8 finish=length double-flake,
+    # seen 2/2 pods 2026-10-21) fail open to a deterministic concat: a
+    # degraded-but-delivered digest beats no digest (never miss mail).
+    try:
+        return _chat(system, muser, "merge-call")
+    except RuntimeError as e:
+        log(f"digest merge: model failed twice ({str(e)[:80]}) — posting "
+            f"partials verbatim as fallback")
+        sections = []
+        for i, p in enumerate(partials, 1):
+            sections.append(f"### Part {i} of {len(partials)}\n\n{p}")
+        return ("(model merge unavailable this fire; sections shown "
+                "verbatim)\n\n" + "\n\n".join(sections))
 
 
 def github_install_token():
