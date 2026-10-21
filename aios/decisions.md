@@ -87,3 +87,9 @@ Chad has many good ideas and finishes few, limited by unscheduled free time (ful
 
 ## 2026-10-18 — Privacy in-flight tier (LLM-assisted, keep-only)
 Chad is actively clearing personal data from data-broker sites; their confirmation emails have unpredictable senders, and an opt-out buried in AIOS-Filed = a failed removal. New digest tier: deterministic broker-domain/subject layer + model-SUGGESTED keeps over would-be-filed mail. ASYMMETRY RULE (first model-influenced classification): the model can only protect mail (suggest → `_file=None`); it can never file, delete, or widen any action. False positive cost = mail stays in inbox (safe default). On model failure: candidates held from the plan this fire, reported, re-checked next fire. Toggleable via `DIGEST_PRIVACY_KEEP` / `DIGEST_PRIVACY_LLM` (0.3.3).
+
+## 2026-10-18 — Warners Stellian protected
+New fridge purchase → active vendor correspondence (order/delivery/service) must stay visible. Added `warnersstellian.com` (+ hyphen variant) to `DIGEST_PROTECTED_DOMAINS` — first commercial sender on the protected list; precedence: protected beats the Orders/Receipts patterns, so a Warners Stellian receipt stays in the inbox too.
+
+## 2026-10-18 — ui.com joins removals
+Ubiquiti (ui.com) correspondence was kept by the sent-contacts tier ("you email this person"). New `DIGEST_CONTACT_EXCLUDES` env: excluded domains fall through to normal junk filing (grace applies). First use: `ui.com`.

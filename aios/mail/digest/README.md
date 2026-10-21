@@ -37,8 +37,11 @@ Fires at **05:00, 12:00, 17:00 America/Chicago** (`timeZone`-pinned). Each run:
    they remain recoverable. Deletes are constrained to the folder-scoped
    listing of `AIOS-Filed` and age-filtered inside the Graph query.
 
-Wrongly-filed mail can be dragged back in Outlook manually, and the pattern
-lists are env-tunable in the CronJob without a rebuild.
+Wrongly-filed mail can be dragged back in Outlook manually. The pattern lists
+are env-tunable — as of 0.5.3 the rule values live in ONE object:
+`k8s/rules-configmap.yaml` (ConfigMap `aios-mail-rules`), which the digest,
+filer, and console all `envFrom` — a rule is edited in one file (no rebuild)
+and all three legs derive the identical config version byte-for-byte.
 
 ## Privacy in-flight tier (0.3.3, 2026-10-18)
 
@@ -83,14 +86,25 @@ are unreachable even at the daemon level.
 
 ## Deploy checklist (ordered)
 
+0. **State volume rule — the PVC that backs `/state` is never deleted or
+   recomputed.** Incident 2026-10-21: in the 0.5.x rollout the state PVC was
+   deleted and recreated (new uid 14:23:24Z); the `nfs-client` StorageClass
+   has `archiveOnDelete: "false"`, so its historic ledger, config journal,
+   and cursor were erased beyond recovery. Mail itself was untouched and
+   every safety gate degraded the SAFE way (items not provably ledger-
+   confirmed are skipped by retention forever), but the audit trail predating
+   Oct 21 14:23Z is gone. Compensations now shipped: `state.compact()` keeps
+   a rolling `ledger-prev.jsonl` copy before every rewrite (self-tested),
+   and volume lifecycle edits are off-limits for this PVC.
+
 1. **Build the image (amd64 — workers run it):**
-   `docker buildx build --platform linux/amd64 --load -t caehomelab/aios-mail-digest:0.3.5 aios/mail/digest/`
-2. **Import on BOTH amd64 workers** (k3s import is node-local; the job has no
-   PVC and `nodeSelector: kubernetes.io/arch: amd64`):
+   `docker buildx build --platform linux/amd64 --load -t caehomelab/aios-mail-digest:0.4.0 aios/mail/digest/`
+2. **Import on BOTH amd64 workers** (k3s import is node-local, and
+   `nodeSelector: kubernetes.io/arch: amd64` pins both legs to those nodes):
    ```bash
-   docker save caehomelab/aios-mail-digest:0.3.5 | \
+   docker save caehomelab/aios-mail-digest:0.4.0 | \
      ssh cengel@192.168.30.60  'sudo -n k3s ctr -n k8s.io images import -'
-   docker save caehomelab/aios-mail-digest:0.3.5 | \
+   docker save caehomelab/aios-mail-digest:0.4.0 | \
      ssh cengel@192.168.30.251 'sudo -n k3s ctr -n k8s.io images import -'
    ```
 3. **Human prerequisites (Chad, once):**
@@ -122,6 +136,30 @@ are unreachable even at the daemon level.
 7. **Verify guards:** the mail daemon pod must ONLY expose the narrowed tool
    list (tools/list through each VK, visible in the Bifrost dashboard shows
    the pin); egress netpol unchanged.
+
+## Digest delivery exemption (0.3.7, 2026-10-21)
+
+Chad reads his updates through GitHub's notification email for issue #50 —
+which the filing tier was sweeping into `AIOS-Filed`. The system was filing
+the mail that announced it had run.
+
+`DIGEST_NOTICE_SENDERS` (default `notifications@github.com`) +
+`DIGEST_NOTICE_SUBJECTS` (default `AIOS daily mail digest`) match on sender
+and subject only, never `bodyPreview` — GitHub notification mail **quotes**
+the digest, so a body match would over-match unrelated GitHub mail. Sender
+matching is exact (or domain-wide when the env value is a bare domain like
+`github.com`); a substring test would let `xnotifications@github.com` through.
+
+Matching mail is kept **silently**, not classified priority: it arrives
+unread and priority re-alerts while unread, so a plain priority rule would
+make every fire narrate its own delivery mail forever — the same
+self-referential loop the classifier's no-`bodyPreview` rule already guards
+against. Verified live: `digest notices kept: 5`, zero self-references in
+the prose, 0 filed.
+
+⚠️ This is a **delivery-location** fix, not a delivery guarantee. Any channel
+that lands in this managed mailbox is subject to the filing tier; the
+exemption is scoped to this one sender+subject pair only.
 
 ## Failure modes to watch (R0 review window, ref #21)
 

@@ -1,0 +1,50 @@
+# ONE source of truth for the mail rules + models — envFrom'd by BOTH the
+# digest and filer CronJobs AND the console deployment. "Rule identity across
+# legs" (one shared config version hash) is enforced by THIS object — any leg
+# that envFrom's it derives the identical config; none can be added without it
+# (a leg missing envFrom would visibly diverge in the console's version chip).
+#
+# Values are the literal env values that previously lived duplicated in
+# cronjob.yaml and filer-cronjob.yaml — copied over VERBATIM so the live
+# config version does not change. New rule keys go HERE, one place only.
+#
+# Secrets (Bifrost VKs, GitHub app) are NOT here — they remain in the
+# Infisical-synced secret (aios-mail-digest-secrets). Bifrost URL and job
+# plumbing stay literal in each CronJob (infra, not rules).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aios-mail-rules
+  labels:
+    app.kubernetes.io/part-of: aios
+data:
+  # Model (2026-10-20: muse-glimmer burned its budget on reasoning and killed
+  # fires — qwen3.8 took over; config fields prose_model/privacy_model both
+  # come from this single var today; the console UI picks per-field later).
+  DIGEST_MODEL: "ollama/qwen3.8:latest"
+  # Chad's priority tiers (comma-separated, lowercase, substring match on
+  # sender name + address + subject only).
+  DIGEST_PRIORITY_KEYWORDS: "bluff creek,ccha,crossbar,bearpath,flag football,cc united"
+  # Protected senders (Chad, 2026-10-17): never filed, never deleted.
+  # warnersstellian.com (2026-10-18): active fridge purchase — stays visible.
+  DIGEST_PROTECTED_DOMAINS: "engelmn.com,alohamn.com,crookedgate.com,warnersstellian.com,warners-stellian.com"
+  # Senders excluded from the sent-contacts tier (2026-10-18: ui.com joins
+  # removals).
+  DIGEST_CONTACT_EXCLUDES: "ui.com"
+  # Sent-contacts lookback: 250 addresses (2026-10-17 sweep, 76 addresses).
+  DIGEST_SENT_TOP: "250"
+  # Digest listing window (2026-10-18: 50 → 200; anything deeper was never
+  # listed, never reported, never filed). The filer re-declares scan_top and
+  # filed_days for rule-identity parity only (it pages fully; never deletes).
+  DIGEST_SCAN_TOP: "200"
+  DIGEST_FILED_DAYS: "10"
+  # Filing tier destination folders.
+  DIGEST_ORDERS_FOLDER: "Orders"
+  DIGEST_RECEIPTS_FOLDER: "Receipts"
+  DIGEST_FILED_FOLDER: "AIOS-Filed"
+  # LLM composer chunk size (40 — qwen3.8 reasoning-spend; see README).
+  DIGEST_CHUNK: "40"
+  # Delivery exemption (2026-10-21): this digest's own GitHub notification
+  # mail stays in the inbox — never filed, never deleted.
+  DIGEST_NOTICE_SENDERS: "notifications@github.com"
+  DIGEST_NOTICE_SUBJECTS: "AIOS daily mail digest"

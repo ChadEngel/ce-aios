@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIOS Inbox Console</title>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--line:#21262d;--fg:#c9d1d9;--dim:#8b949e;
+        --acc:#58a6ff;--ok:#3fb950;--warn:#d29922;--err:#f85149;--chip:#1f6feb33}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:24px}
+  .wrap{max-width:1100px;margin:0 auto}
+  header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:18px}
+  h1{font-size:20px;font-weight:600}
+  .badge{display:inline-block;padding:2px 10px;border-radius:20px;font-size:12px;border:1px solid var(--line)}
+  .ro{color:var(--ok);border-color:var(--ok)}
+  .chip{font-size:12px;color:var(--dim)}
+  .origin{padding:1px 7px;border-radius:10px;font-size:11px}
+  .origin.file{background:#238636;color:#fff}
+  .origin.env{background:#1f6feb;color:#fff}
+  .origin.default{background:#30363d;color:var(--dim)}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .card .n{font-size:26px;font-weight:700}
+  .card .t{font-size:12px;color:var(--dim);margin-top:4px}
+  .card.alert .n{color:var(--err)}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:18px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:12px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  td,th{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left}
+  th{color:var(--dim);font-weight:500;font-size:12px}
+  tr:last-child td{border-bottom:none}
+  .mini{color:var(--dim);font-size:12px}
+  .banner{background:#2d333b;border:1px dashed var(--warn);border-radius:8px;padding:10px 14px;margin:10px 0}
+  button{background:var(--acc);color:#fff;border:0;border-radius:8px;padding:8px 16px;cursor:pointer;font-size:14px}
+  button:disabled{opacity:.5;cursor:default}
+  textarea{width:100%;min-height:120px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px;font:12px ui-monospace,monospace}
+  .sample{color:var(--dim);font-size:12px;padding:2px 0 2px 10px}
+  .err{color:var(--err)}
+  .ok{color:var(--ok)}
+  a{color:var(--acc)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div><h1>✉️ AIOS Inbox Console</h1>
+         <span class="chip">read-only · one box, one mailbox</span></div>
+    <div><span class="badge ro">READ-ONLY</span>
+         <span class="badge" id="cfgver">config …</span></div>
+  </header>
+
+  <div class="cards" id="cards"></div>
+
+  <section>
+    <h2>Fires</h2>
+    <div id="fires" class="mini">loading…</div>
+  </section>
+
+  <section>
+    <h2>Effective rules <span id="confsrc" class="chip"></span></h2>
+    <table id="rules"><thead>
+      <tr><th>Key</th><th>Value</th><th>Origin</th></tr>
+      </thead><tbody></tbody></table>
+    <p class="mini" style="margin-top:8px">Origin <b>file</b> = named in
+    config.yaml on /state (wins per-key) · <b>env</b> = supplied by the
+    k8s manifest · <b>default</b> = engine default. A config change takes
+    effect at the NEXT fire; every ledger item records the version that
+    decided it.</p>
+  </section>
+
+  <section>
+    <h2>Config journal (D5)</h2>
+    <div id="journal" class="mini">no changes yet — env-manifest in force</div>
+  </section>
+
+  <section>
+    <h2>Recent inbox (keeps) &amp; recent filed</h2>
+    <table id="recent"><thead><tr><th style="width:8%">When</th>
+      <th style="width:10%">Where</th><th>Subject</th>
+      <th style="width:14%">Sender</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section>
+    <h2>Dry-run preview — what would a rule change do?</h2>
+    <div class="banner">Preview only — nothing is saved, nothing is moved.
+    Computed against the newest ledger items with the HYPOTHETICAL rules.
+    (The "you email this person" tier needs live sent-folder data, so it is
+    excluded from previews.)</div>
+    <textarea id="ov" spellcheck="false">{
+  "filed_days": 14,
+  "privacy_domains": ["spokeo.com", "whitepages.com"]
+}</textarea>
+    <div style="margin-top:10px"><button id="drybtn">Compute preview</button>
+      <span id="drymeta" class="chip" style="margin-left:10px"></span></div>
+    <div id="dryout" style="margin-top:14px"></div>
+  </section>
+
+  <footer class="mini">Boundaries: this console has no mutation endpoints;
+  /state is read-only; mail is only touched by the digest/filer legs.
+  Filing is recoverable; missing mail is not — the console can never make
+  mail disappear.</footer>
+</div>
+
+<script>
+const esc = s => (s+'').replace(/[&<>"']/g,c=>({'"':'&quot;',"'":'&#39;'}))[c]||c;
+const ts = s => s ? s.replace('T',' ').slice(0,16) : '—';
+
+async function load() {
+  const r = await fetch('/api/state');
+  if (r.status === 401) { document.body.innerHTML = '<p style="margin:40px">401 — open the console URL from your LAN; your browser should prompt for a password.</p>'; return; }
+  const s = await r.json();
+  document.getElementById('cfgver').textContent = 'config ' + s.config.version + ' (' + s.config.source + ')';
+  const L = s.ledger;
+  const cards = [
+    [L.items, 'ledger items (all time)'],
+    [L.in_inbox_estimate, 'in inbox (estimate)'],
+    [L.pending_digest_report, 'awaiting digest report'],
+    [L.unresolved, 'unresolved intents'],
+    [Object.values(L.filed_by_folder).reduce((a,b)=>a+b,0), 'filed total'],
+    [ts(L.last_write_ts), 'ledger last write'],
+  ];
+  document.getElementById('cards').innerHTML =
+    cards.map(([n,t],i) =>
+      `<div class="card ${t.includes('unresolved') && n>0 ? 'alert':''}">
+       <div class="n">${typeof n==='number'?n:esc(n||'—')}</div>
+       <div class="t">${esc(t)}</div></div>`).join('');
+
+  const k = s.k8s;
+  if (k) {
+    const cj = Object.fromEntries(k.cronjobs.map(c=>[c.name,c]));
+    const jb = Object.fromEntries(k.jobs.map(c=>[c.name,c]));
+    const line = (nm,label) => {
+      const c = cj['aios-mail-'+nm], j = jb['aios-mail-'+nm];
+      return `<b>${esc(label)}</b> — schedule
+        <code>${esc(c?.schedule||'—')}</code>
+        · suspend ${c?.suspend?'<span class="err">YES</span>':'no'}
+        · ok ${c?.succeeded??0} · failed ${c?.failed??0}
+        · last fire ${c?.last_schedule?ts(c.last_schedule):'—'}`;
+    };
+    document.getElementById('fires').innerHTML = line('filer','Filer (5-min leg)')+'<br>'+line('digest','Digest (3x/day)')+'<br>'+
+      '<span class="mini">models: '+esc(s.config.prose_model)+' (prose) · '+esc(s.config.privacy_model)+' (privacy)</span>';
+  } else {
+    document.getElementById('fires').innerHTML = '<span class="mini">k8s status unavailable (no serviceaccount in local mode)</span>';
+  }
+
+  const rules = document.getElementById('rules').tBodies[0];
+  rules.innerHTML = s.config.keys.map(k2 =>
+    `<tr><td><code>${esc(k2.key)}</code></td><td>${esc(k2.value)}</td>
+     <td><span class="origin ${k2.origin}">${k2.origin}</span></td></tr>`).join('');
+  document.getElementById('confsrc').textContent =
+    s.config.file_keys.length ? (s.config.file_keys.length + ' key(s) overridden by file') : '';
+
+  document.getElementById('journal').innerHTML = !s.config.journal.length
+    ? 'no changes yet — env-manifest in force (loading config.yaml for the first time records a save here)'
+    : s.config.journal.map(j=>`${esc(ts(j.ts))} — ${esc(j.actor||'?')} — ${esc(j.version||'')}`).join('<br>');
+
+  const rec = document.getElementById('recent').tBodies[0];
+  const rows = L.recent_keeps.map(k3=>[ts(k3.ts),'inbox',k3.subject,k3.sender])
+    .concat(L.recent_filed.map(k3=>[ts(k3.ts),'→ '+k3.folder,k3.subject,k3.sender]));
+  rec.innerHTML = rows.map(r=>`<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td>
+    <td>${esc(r[2])}</td><td>${esc(r[3])}</td></tr>`).join('');
+}
+
+async function dryrun() {
+  const btn = document.getElementById('drybtn');
+  btn.disabled = true; btn.textContent = 'Computing…';
+  const out = document.getElementById('dryout');
+  let ov;
+  try { ov = JSON.parse(document.getElementById('ov').value); }
+  catch (e) {
+    out.innerHTML = `<p class="err">JSON parse error: ${esc(e.message)}</p>`;
+    btn.disabled = false; btn.textContent = 'Compute preview'; return;
+  }
+  const r = await fetch('/api/dryrun', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({overrides: ov})
+  });
+  const j = await r.json();
+  if (r.status !== 200) {
+    out.innerHTML = `<p class="err">${esc(j.detail||('HTTP '+r.status))}</p>`;
+  } else {
+    document.getElementById('drymeta').textContent =
+      `${j.items_scanned} items · proposed config ${j.proposed_version}`;
+    out.innerHTML = j.changed === 0
+      ? '<p class="ok">No changes — every item lands in the same place under the proposed rules.</p>'
+      : j.changes.map(g =>
+         `<p style="margin:6px 0"><b>${esc(g.from)}</b> → <b>${esc(g.to)}</b> · ${g.count} item(s)</p>`
+         + g.sample.map(smp=>`<div class="sample">· ${esc(smp.subject)}</div>`).join(''))
+        .join('');
+  }
+  btn.disabled = false; btn.textContent = 'Compute preview';
+}
+document.getElementById('drybtn').onclick = dryrun;
+load();
+</script>
+</body>
+</html>
