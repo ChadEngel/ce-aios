@@ -179,7 +179,7 @@ def main():
     # --- 0. Config store (0.5.0): rules from YAML if present, env below. The
     # digest module's rule globals are updated in place so BOTH legs always
     # agree with each other and with whatever config version loaded.
-    cfg = D.apply_config()
+    D.apply_config()
     # Crash repair first; never stack a new run on an unresolved gap.
     try:
         reconcile()

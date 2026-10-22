@@ -9,8 +9,8 @@ Fires at **05:00, 12:00, 17:00 America/Chicago** (`timeZone`-pinned). Each run:
      tier), senders on `DIGEST_PROTECTED_DOMAINS` (engelmn.com, alohamn.com,
      crookedgate.com — family/personal domains, never filed or deleted), or
      keyword hits (`DIGEST_PRIORITY_KEYWORDS`: bluff creek, ccha, crossbar,
-     bearpath, flag football, cc united). Stays in the inbox; re-alerts every
-     fire while unread.
+     bearpath, flag football, cc united). Stays in the inbox; reported ONCE
+     (see NEW-ONLY reporting below) rather than re-alerting every fire.
    - **Receipts** (subject/sender matches `DIGEST_RECEIPT_PATTERNS`) → moved
      to the **`Receipts`** folder.
    - **Orders** (matches `DIGEST_ORDER_PATTERNS`) → moved to the **`Orders`**
@@ -42,6 +42,43 @@ are env-tunable — as of 0.5.3 the rule values live in ONE object:
 `k8s/rules-configmap.yaml` (ConfigMap `aios-mail-rules`), which the digest,
 filer, and console all `envFrom` — a rule is edited in one file (no rebuild)
 and all three legs derive the identical config version byte-for-byte.
+
+## NEW-ONLY reporting (0.5.4, 2026-10-22)
+
+**Bug:** every fire re-listed the whole inbox instead of the new mail. Cause: 
+priority mail stays in the inbox by design, and the `fresh` predicate in
+`main()` had NO "already reported" gate for the priority tier — so each
+priority item re-appeared on every fire, forever. That grew the comment past
+the self-imposed 4000-char cap, and because the hidden dedupe tracker line was
+appended LAST, truncation erased it — so the NEXT fire could not tell what had
+already been reported and the loop compounded.
+
+**Fixes (all in `digest.py`):**
+1. `select_fresh()` gates EVERY tier on "not yet reported" (priority, privacy,
+   junk). Priority now reports **once**. Read state is no longer consulted:
+   the old "re-alert while unread" rule was the re-index itself, and it also
+   meant junk read in Outlook before the fire was never reported — and junk
+   only files after being reported, so it would have sat in the inbox forever.
+2. `comment_body()` is TRACKER-FIRST: the hidden `<!--aios-tracker|…-->` line
+   sits right after the header and only the model PROSE is ever trimmed, so
+   the dedupe ledger and the Filed block always survive truncation.
+3. `MAX_COMMENT_CHARS` raised 4000 -> 60000 (GitHub allows 65536); bytes were
+   never the model's fault. Env-tunable via `DIGEST_MAX_COMMENT_CHARS`.
+4. Dedupe now has a DURABLE second source: `ledger_mark_reported()` flags every
+   reported id in the ledger (not just filer-originated rows), and
+   `ledger_reported_ids()` feeds the dedupe set. The ledger survives a
+   truncated comment AND a state-volume rebuild; the tracker survives a
+   ledger wipe. Union of both = "only new mail" holds when either is damaged.
+5. `tracker_ids()` pages to the END of the thread (~1000 comments, bounded):
+   the GitHub comments API returns OLDEST-first and **ignores** `sort`/`direction`
+   (verified live 2026-10-22: `desc` and `asc` return the same order), so the
+   old `per_page=60` was reading a frozen old window that would have silently
+   re-reported everything once the thread passed 60 comments (~3 weeks at
+   3 fires/day).
+
+Self-test: `selftest_digest.py` (21 checks) — reported items do not re-list,
+new items report exactly once, duplicates collapse, the tracker and Filed block
+survive truncation, and the ledger `reported` flag round-trips.
 
 ## Privacy in-flight tier (0.3.3, 2026-10-18)
 

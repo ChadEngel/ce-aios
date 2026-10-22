@@ -21,6 +21,14 @@ or unread — pattern-locked, low false-positive risk); junk files only after
 it has been REPORTED in an earlier fire (grace >= 1 fire, ~5-12h residency;
 read state does not matter — reported means leave-the-inbox).
 
+NEW-ONLY REPORTING (0.5.4, Chad 2026-10-22): each fire summarises only what
+has NOT been reported before. Priority mail stays in the inbox by design, so
+before this fix every priority item re-listed on every fire — an index of the
+whole inbox, not a digest. Dedupe has TWO durable sources: the hidden
+tracker lines on past comments AND the ledger's `reported` flag (which the
+tracker used to lose whenever a long comment got truncated). See
+select_fresh() and comment_body().
+
 Compartments: prose/reads use the read VK (BIFROST_VK_AIOS_HELPDESK); folder
 list/create, move and delete use the FILE-ONLY VK (BIFROST_VK_AIOS_HELPDESK_FILE)
 whose execute list is exactly [create-mail-folder, move-mail-message,
@@ -42,7 +50,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import jwt
 
@@ -148,7 +156,15 @@ SCAN_TOP = int(os.environ.get("DIGEST_SCAN_TOP", "50"))
 # ledger (filing and retention rules still apply normally).
 FORCE = os.environ.get("DIGEST_FORCE") == "1"
 BODY_PREVIEW_CHARS = int(os.environ.get("DIGEST_PREVIEW_CHARS", "400"))
-MAX_COMMENT_CHARS = 4000
+# GitHub's issue-comment ceiling is 65536 chars; keep a safety margin. The
+# old 4000 was a self-inflicted cap that truncated long digests — and because
+# the hidden tracker (dedupe) line was appended LAST, truncation silently
+# erased it, which is how "report only new mail" degraded to "re-index every
+# fire". comment_body() is now assembled TRACKER-FIRST and only the model
+# PROSE is ever trimmed, so the dedupe ledger and the Filed block always
+# survive.
+MAX_COMMENT_CHARS = int(os.environ.get("DIGEST_MAX_COMMENT_CHARS", "60000"))
+TRUNC_MARKER = "\n\n…(truncated)"
 TRACKER_TAG = "aios-tracker"
 
 # ---------------------------------------------------------------- engine
@@ -469,23 +485,9 @@ def privacy_llm_keeps(cands):
 
 # ---------------------------------------------------------------- filing tier
 
-def folder_map():
-    data = graph_file("list-mail-folders", {"top": 100})
-    return {f["displayName"].lower(): f["id"] for f in (data.get("value") or [])}
-
-
-def ensure_folder(name):
-    fm = folder_map()
-    fid = fm.get(name.lower())
-    if fid:
-        return fid
-    graph_file("create-mail-folder", {"body": {"displayName": name}})
-    log(f"file: created folder: {name}")
-    time.sleep(1)
-    fid = folder_map().get(name.lower())
-    if not fid:
-        raise RuntimeError(f"folder create/list failed for {name}")
-    return fid
+# folder_map() and ensure_folder() are defined once above as thin delegators to
+# the engine's filing port (0.5.0). Local copies used to shadow them here; they
+# were dead and a trap for anyone editing the delegators, so they are gone.
 
 
 def file_items(plan):
@@ -694,28 +696,43 @@ def github_install_token():
 
 def tracker_ids(today_only):
     """Digest comments on #50 = the ledger (no extra state infra). Graceful
-    filing needs ANY-day ids; dedupe needs today's ids only."""
+    filing needs ANY-day ids; dedupe needs today's ids only.
+
+    IMPORTANT: the GitHub comments API returns OLDEST-first and IGNORES
+    `sort`/`direction` (verified live 2026-10-22: desc and asc return the same
+    order), so a bare `per_page=60` silently reads only the OLDEST 60 comments
+    — at 3 fires/day the thread passes 60 comments in ~3 weeks and dedupe would
+    then read a frozen old window and re-report everything. So page FORWARD to
+    the end (bounded) and accumulate, which is the only way to see the newest
+    comments. The ledger's `reported` flag is the durable backstop.
+    """
     token = github_install_token()
-    r = http_json(
-        "GET",
-        f"https://api.github.com/repos/{GITHUB_APP_REPO}/issues/"
-        f"{DIGEST_ISSUE_NUMBER}/comments?per_page=60",
-        {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
     today = local_now().strftime("%Y-%m-%d")
     ids = set()
-    for c in r if isinstance(r, list) else []:
-        body = c.get("body") or ""
-        for line in body.splitlines():
-            if not line.startswith("<!--" + TRACKER_TAG + "|"):
-                continue
-            rest = line[len("<!--" + TRACKER_TAG + "|"):]
-            if "|ids:" not in rest:
-                continue
-            date_part, ids_part = rest.split("|ids:", 1)
-            if today_only and date_part != today:
-                continue
-            ids.update(p.strip() for p in ids_part.rstrip("-->").split(",")
-                       if p.strip())
+    for page in range(1, 11):  # up to ~1000 comments; newest are on the last page
+        r = http_json(
+            "GET",
+            f"https://api.github.com/repos/{GITHUB_APP_REPO}/issues/"
+            f"{DIGEST_ISSUE_NUMBER}/comments?per_page=100&page={page}",
+            {"Authorization": f"Bearer {token}",
+             "Accept": "application/vnd.github+json"})
+        if not isinstance(r, list) or not r:
+            break
+        for c in r:
+            body = c.get("body") or ""
+            for line in body.splitlines():
+                if not line.startswith("<!--" + TRACKER_TAG + "|"):
+                    continue
+                rest = line[len("<!--" + TRACKER_TAG + "|"):]
+                if "|ids:" not in rest:
+                    continue
+                date_part, ids_part = rest.split("|ids:", 1)
+                if today_only and date_part != today:
+                    continue
+                ids.update(p.strip() for p in ids_part.rstrip("-->").split(",")
+                           if p.strip())
+        if len(r) < 100:
+            break  # short page = reached the newest comment
     return ids
 
 
@@ -728,22 +745,17 @@ def ledger_new_since():
     this, mail the filer handled would be filed correctly and NEVER summarised.
     The ledger is the only record that survives the move.
 
-    Returns (entries, first_boot). first_boot=True means there is no prior
-    report cursor: this is either the very first run or the ledger was rebuilt.
-    We then deliberately report NOTHING rather than dumping the entire backlog
-    into one digest — a 400-item first digest is unreadable and would bury the
-    genuinely new mail. The cursor is seeded and normal reporting starts from
-    the next fire.
+    Returns a list of entries. On first boot (no prior report cursor) it
+    seeds the cursor and returns an EMPTY list — we deliberately report nothing
+    rather than dumping the entire backlog into one digest: a 400-item first
+    digest is unreadable and would bury the genuinely new mail. Normal
+    reporting starts from the next fire.
     """
     import state as ST
     rows = ST.read_all(since_days=ST.RETENTION_SCAN_DAYS)
     if not rows:
-        return [], False
+        return []
     cursor_path = os.path.join(ST.STATE_DIR, "last_digest_report")
-    # Reconcile against what we have ALREADY posted, so a wiped cursor can
-    # never cause a re-report of everything.
-    already = ST.latest_by_id(rows)
-    done = {mid for mid, r in already.items() if r.get("reported")}
     if not os.path.exists(cursor_path):
         try:
             with open(cursor_path, "w", encoding="utf-8") as fh:
@@ -753,13 +765,18 @@ def ledger_new_since():
         except Exception as exc:
             log(f"ledger cursor seed failed: {str(exc)[:80]}")
         log("ledger: no report cursor — seeding, not dumping backlog this fire")
-        return [], True
+        return []
     try:
         with open(cursor_path, "r", encoding="utf-8") as fh:
             since = fh.read().strip()
     except Exception:
         since = ""
-    fresh_rows = [r for r in rows if r.get("ts", "") > since]
+    # Inclusive floor (>=), because `reported` is now the authoritative dedupe
+    # gate: a row sharing the cursor's exact second is re-examined and then
+    # filtered out if already reported (see the entries loop below), instead of
+    # being skipped forever by a strict `>`. A wiped cursor therefore cannot
+    # re-report everything — the `reported` flag is what prevents that.
+    fresh_rows = [r for r in rows if r.get("ts", "") >= since]
     entries = []
     for r in fresh_rows:
         if r.get("t") != "outcome" or r.get("reported"):
@@ -767,30 +784,44 @@ def ledger_new_since():
         if r.get("status") not in ("filed", "keep"):
             continue
         entries.append(r)
-    return entries, False
+    return entries
 
 
-def ledger_mark_reported(rows):
-    """Advance the report cursor + flag rows as reported, so the next fire
-    summarises only what arrived since."""
+def ledger_mark_reported(ids, cursor_ts=None):
+    """Record `reported` durably for EVERY id this fire summarised, and advance
+    the report cursor. Marking all reported ids (not just ledger-originated
+    ones) makes the ledger a complete second dedupe source: tracker lines live
+    in GitHub comments (truncatable) while these rows survive a bad comment AND
+    a state-volume rebuild. latest_by_id field-merges, so a reported row
+    carrying only {t,id,reported} never clobbers folder/status.
+    """
     import state as ST
-    if not rows:
+    for mid in ids:
+        if mid:
+            ST.append({"t": "outcome", "id": mid, "reported": True})
+    if not cursor_ts:
         return
-    for r in rows:
-        if r.get("id"):
-            ST.append({"t": "outcome", "id": r.get("id"),
-                       "folder": r.get("folder"), "status": r.get("status"),
-                       "reported": True})
-    last_ts = max((r.get("ts", "") for r in rows), default=None)
-    if last_ts:
-        path = os.path.join(ST.STATE_DIR, "last_digest_report")
-        try:
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(last_ts + "\n")
-                fh.flush()
-                os.fsync(fh.fileno())
-        except Exception as exc:
-            log(f"cursor advance failed: {str(exc)[:80]}")
+    path = os.path.join(ST.STATE_DIR, "last_digest_report")
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(cursor_ts + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+    except Exception as exc:
+        log(f"cursor advance failed: {str(exc)[:80]}")
+
+
+def ledger_reported_ids():
+    """Message ids the LEDGER says were already reported. Durable second dedupe
+    source: the hidden tracker lines live in GitHub comments, which a long fire
+    used to truncate away; the ledger row's `reported` flag (field-merged
+    through compaction) survives that AND a state-volume rebuild. The union of
+    tracker + ledger keeps "only new mail" true when either source is damaged.
+    """
+    import state as ST
+    rows = ST.read_all(since_days=ST.RETENTION_SCAN_DAYS)
+    return {mid for mid, r in ST.latest_by_id(rows).items()
+            if r.get("reported")}
 
 
 def ledger_to_classified(entries):
@@ -814,8 +845,50 @@ def ledger_to_classified(entries):
     return out
 
 
-def github_comment(digest_text, filed_counts, cleared_count, reported_ids,
-                   install_token):
+def select_fresh(classified, reported, filed_set):
+    """NEW-ONLY report selection (Chad 2026-10-22). The digest must show what
+    arrived since the last fire, not an index of everything still in the
+    inbox. Priority mail STAYS in the inbox by design, so without the
+    `reported` gate each priority item re-listed on every single fire forever
+    — which then overflowed the comment cap and truncated the dedupe ledger,
+    compounding the loop.
+
+    Read state is deliberately NOT consulted any more: the old "re-alert while
+    unread" rule WAS the re-index itself, and gating on `_unread` also meant a
+    junk item read in Outlook before the fire was never reported — and junk
+    only files after it has been reported, so it would sit in the inbox
+    forever. "New to the digest" is now exactly "not yet reported".
+
+    Also de-duplicates by id: the same message can arrive twice in
+    `classified` — once from the live inbox listing and once adapted from the
+    filer's ledger row (the filer journals a `keep` row for priority mail that
+    never moves). Without this, one priority item could post two bullets.
+
+    Privacy-kept mail is EXCLUDED here on purpose: it is reported once, in its
+    own "Privacy (kept in inbox)" section (see privacy_new in main()), so it
+    must not ALSO appear as a Priority/other bullet.
+    """
+    fresh, emitted = [], set()
+    for c in classified:
+        mid = c["_id"]
+        if not mid or mid in reported or mid in emitted:
+            continue
+        if c.get("_privacy"):
+            continue
+        if ((c["type"] == "priority" and not c.get("_self_notice"))
+                or (c["_file"] == "filed" and mid not in filed_set)):
+            emitted.add(mid)
+            fresh.append(c)
+    return fresh
+
+
+def comment_body(digest_text, filed_counts, cleared_count, reported_ids):
+    """Assemble the comment. TRACKER-FIRST layout: the hidden dedupe line goes
+    immediately after the header, and only the model prose is eligible for
+    truncation, so neither the dedupe ledger nor the deterministic Filed block
+    can ever be cut off (the old tail-appended tracker vanished on every long
+    fire, which silently broke dedupe for the NEXT fire).
+    """
     ids_blob = f"<!--{TRACKER_TAG}|{local_now().strftime('%Y-%m-%d')}|ids:" \
                + ",".join(sorted(set(reported_ids))) + "-->"
     lines = []
@@ -834,24 +907,36 @@ def github_comment(digest_text, filed_counts, cleared_count, reported_ids,
         lines.append(f"- {FILED_FOLDER}: {cleared_count} expired (> {FILED_DAYS}d) "
                      "→ Deleted Items")
     filed_block = "\n".join(lines) if lines else "- none"
-    body = (f"## ✉️ AIOS mail digest — {local_stamp()}\n\n"
-            f"{digest_text}\n\n"
-            f"**Filed**\n{filed_block}\n\n"
-            "<sub>Generated locally ("
-            + (MODEL or "?").split("/", 1)[-1]
-            + ", `reasoning_effort: none`). "
-            "Classification/filing/retention are deterministic code; the model "
-            "only writes prose. Mail content is untrusted data. R0 ref #21.</sub>\n\n"
-            f"{ids_blob}")
-    if len(body) > MAX_COMMENT_CHARS:
-        body = body[:MAX_COMMENT_CHARS - 20] + "\n\n…(truncated)"
+    header = f"## ✉️ AIOS mail digest — {local_stamp()}\n\n"
+    footer = ("<sub>Generated locally ("
+              + (MODEL or "?").split("/", 1)[-1]
+              + ", `reasoning_effort: none`). "
+              "Classification/filing/retention are deterministic code; the model "
+              "only writes prose. Mail content is untrusted data. R0 ref #21.</sub>")
+    prefix = f"{header}{ids_blob}\n\n"
+    suffix = f"\n\n**Filed**\n{filed_block}\n\n{footer}\n"
+    # Only the prose is trimmed. The tracker + Filed block are the parts that
+    # MUST survive (dedupe correctness), so they are never cut; the prose is
+    # sized to fit what remains. If a pathological config makes the fixed parts
+    # alone exceed the cap there is nothing left to trim — the body is then
+    # simply longer than the cap (the real cap is 60000, so this never happens).
+    budget = MAX_COMMENT_CHARS - len(prefix) - len(suffix)
+    prose = digest_text or ""
+    if budget > len(TRUNC_MARKER) and len(prose) > budget:
+        prose = prose[:budget - len(TRUNC_MARKER)] + TRUNC_MARKER
+    return prefix + prose + suffix
+
+
+def github_comment(digest_text, filed_counts, cleared_count, reported_ids,
+                   install_token):
+    body = comment_body(digest_text, filed_counts, cleared_count, reported_ids)
     c = http_json(
         "POST", f"https://api.github.com/repos/{GITHUB_APP_REPO}/issues/"
                 f"{DIGEST_ISSUE_NUMBER}/comments",
         {"Authorization": f"Bearer {install_token}",
          "Accept": "application/vnd.github+json", "Content-Type": "application/json"},
         {"body": body})
-    log(f"comment posted: id={c.get('id')}")
+    log(f"comment posted: id={c.get('id')} ({len(body)} chars)")
     return c.get("id")
 
 
@@ -863,10 +948,22 @@ def main():
     apply_config()
     items, unread_count = fetch_inbox()
     seen = tracker_ids(today_only=True)
+    prior = tracker_ids(today_only=False)
+    # Everything ALREADY reported, from BOTH durable sources: the tracker lines
+    # on past comments, and the ledger's `reported` flag (which survives the
+    # truncation that used to eat the tracker, and a state-volume rebuild).
+    # Union, because either source alone can be damaged. `ever_reported` also
+    # feeds junk's report-before-file grace; `reported` is the dedupe set and
+    # is cleared by DIGEST_FORCE so a manual fire still shows the full picture.
+    ever_reported = set(prior)
+    try:
+        ever_reported |= ledger_reported_ids()
+    except Exception as exc:
+        log(f"ledger dedupe unavailable ({str(exc)[:80]}) — tracker only")
+    reported = set() if FORCE else set(ever_reported)
     if FORCE:
         seen = set()
-        log("DIGEST_FORCE=1 — full picture, ledger ignored")
-    prior = tracker_ids(today_only=False)
+        log("DIGEST_FORCE=1 — full picture, dedupe ignored")
 
     contacts = fetch_sent_contacts()
     classified = classify(items, contacts)
@@ -877,7 +974,7 @@ def main():
     # digest would report only what the filer had not yet touched, and mail
     # filed minutes ago would never be summarised at all. The ledger is the
     # only record that survives the move.
-    ledger_entries, seeding = ledger_new_since()
+    ledger_entries = ledger_new_since()
     ledger_cls = ledger_to_classified(ledger_entries)
     ledger_filed = {}
     for r in ledger_entries:
@@ -891,7 +988,6 @@ def main():
         # (they are not in the inbox any more).
         for c in ledger_cls:
             c["_file"] = None
-            c["_filed_by_filer"] = r_folder = c.get("_file")
         classified = ledger_cls + classified
 
     # Privacy in-flight tier. Layer 1 (deterministic) is already stamped by
@@ -927,7 +1023,7 @@ def main():
     plan = [(c, c["_file"]) for c in classified
             if c["_file"] in ("receipts", "orders") and not c.get("_held")]
     plan += [(c, FILED_FOLDER) for c in classified
-             if c["_file"] == "filed" and c["_id"] in prior
+             if c["_file"] == "filed" and c["_id"] in ever_reported
              and not c.get("_held")]
     log(f"filing plan: {len(plan)} items "
         f"(typed={sum(1 for _, f in plan if f != FILED_FOLDER)}, "
@@ -944,21 +1040,21 @@ def main():
         cleared = 0
 
     # Prose tiers describe the inbox BEFORE filing; filed items report through
-    # the deterministic Filed section instead. Priority re-alerts every fire
-    # while still in the inbox (as in 0.2.x); junk reports once (tracker).
+    # the deterministic Filed section instead. NEW-ONLY: every tier is gated on
+    # "never reported before" (select_fresh), so priority mail that stays in
+    # the inbox no longer re-lists on every fire.
     filed_set = {c["_id"] for c, _ in plan}
-    fresh = [c for c in classified
-             if (c["type"] == "priority" and not c.get("_self_notice"))
-             or (c.get("_privacy") and c["_unread"] and c["_id"] not in seen)
-             or (c["_file"] == "filed" and c["_unread"]
-                 and c["_id"] not in seen and c["_id"] not in filed_set)]
+    fresh = select_fresh(classified, reported, filed_set)
+    # Privacy items get their own section — show only the ones that are new.
+    privacy_new = [c for c in privacy if c["_id"] not in reported]
     kept_notices = sum(1 for c in classified if c.get("_self_notice"))
-    log(f"tracking: {len(seen)} today / {len(prior)} ledger; "
-        f"prose fresh: {len(fresh)}; privacy: {len(privacy)}; "
+    log(f"tracking: {len(seen)} today / {len(prior)} tracker / "
+        f"{len(reported)} dedupe; prose fresh: {len(fresh)}; "
+        f"privacy new: {len(privacy_new)} of {len(privacy)}; "
         f"digest notices kept: {kept_notices}")
 
     if (not unread_count and not fresh and not plan and cleared == 0
-            and not privacy):
+            and not privacy_new):
         if not seen:
             log("morning all-clear")
             token = github_install_token()
@@ -966,7 +1062,7 @@ def main():
         else:
             log("all clear (already posted today) — skipping")
         return
-    if not fresh and not plan and cleared == 0 and not privacy:
+    if not fresh and not plan and cleared == 0 and not privacy_new:
         log("nothing new since last fire — skipping post")
         return
 
@@ -981,22 +1077,36 @@ def main():
         counts[folder].extend(rows_)
 
     token = github_install_token()
-    if fresh or privacy:
-        summary = summarize(fresh, unread_count, privacy=privacy)
+    if fresh or privacy_new:
+        summary = summarize(fresh, unread_count, privacy=privacy_new)
     else:
         summary = "No prose this fire — this post reflects deterministic "\
                   "filing/retention actions only."
     log("digest generated:", len(summary), "chars")
-    github_comment(summary, counts, cleared, [c["_id"] for c in fresh], token)
-    # Mark the filer's rows reported and advance the cursor LAST, so a crash
-    # anywhere above causes a re-report rather than a silent skip.
-    if ledger_entries:
-        try:
-            ledger_mark_reported(ledger_entries)
-            log(f"ledger: marked {len(ledger_entries)} item(s) reported")
-        except Exception as exc:
-            log(f"ledger: report marking FAILED (may re-report next fire): "
-                f"{str(exc)[:100]}")
+    # Everything this fire REPRESENTED on the issue: the prose items, the
+    # privacy section, and the filer's new ledger rows (which appear in the
+    # deterministic Filed block). All of them must be flagged reported, or a
+    # filer-filed row the prose did not mention would resurface every fire.
+    reported_now = ([c["_id"] for c in fresh]
+                    + [c["_id"] for c in privacy_new]
+                    + [r.get("id") for r in ledger_entries])
+    reported_now = sorted({m for m in reported_now if m})
+    github_comment(summary, counts, cleared, reported_now, token)
+    # Durable dedupe LAST: flag every id this fire reported in the ledger, and
+    # advance the filer-row cursor to the newest ledger entry we summarised, so
+    # a crash anywhere above causes a re-report rather than a silent skip.
+    # Marking ALL reported ids (not just the filer-originated ones) is what
+    # keeps "only new mail" true even when a comment got truncated or the
+    # tracker window was unreadable. The cursor only ever moves to the newest
+    # row we actually consumed: rows the filer writes DURING this fire stay
+    # newer than the cursor and are still summarised next fire.
+    try:
+        cursor_ts = max((r.get("ts", "") for r in ledger_entries), default=None)
+        ledger_mark_reported(reported_now, cursor_ts=cursor_ts)
+        log(f"ledger: marked {len(reported_now)} report(s) durable")
+    except Exception as exc:
+        log(f"ledger: report marking FAILED (may re-report next fire): "
+            f"{str(exc)[:100]}")
 
 
 if __name__ == "__main__":

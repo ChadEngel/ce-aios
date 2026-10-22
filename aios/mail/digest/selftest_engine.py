@@ -4,8 +4,6 @@ classifier fixtures, retention gate. Run BEFORE deploying.
 
     python3 selftest_engine.py
 """
-import importlib.util
-import json
 import os
 import sys
 import tempfile
