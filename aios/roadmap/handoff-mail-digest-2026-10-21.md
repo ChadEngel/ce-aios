@@ -115,7 +115,8 @@ cd aios/mail/digest && \
   DIGEST_ISSUE_NUMBER=1 GITHUB_REPO=o/r DIGEST_STATE_DIR=/tmp/t-$$ \
   python3 selftest_engine.py                            # 33
   python3 selftest_state.py                             # 21
-  python3 selftest_digest.py                            # 21 (new-only reporting + tracker safety)
+  python3 selftest_digest.py                            # 32 (new-only reporting + tracker
+                                                        #     safety + filer post-trigger)
 ```
 
 ## 7. INCIDENT 2026-10-21 14:23Z (the one thing not to repeat)
