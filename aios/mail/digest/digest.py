@@ -29,6 +29,14 @@ tracker lines on past comments AND the ledger's `reported` flag (which the
 tracker used to lose whenever a long comment got truncated). See
 select_fresh() and comment_body().
 
+FILER HAND-OFF (0.5.5, Chad 2026-10-22): the 5-min filer MOVES mail out of the
+inbox, so the 3x/day digest can only learn about it from the ledger. New
+filer-filed rows are now a POST TRIGGER: a window where only the filer acted
+posts the deterministic Filed block (no prose model call) instead of silently
+skipping — otherwise that mail was never summarised by any fire. The ledger row
+is field-merged (intent + outcome) so the Filed block shows the real sender
+instead of "unknown", and the `reported` flag is read from the merged row.
+
 Compartments: prose/reads use the read VK (BIFROST_VK_AIOS_HELPDESK); folder
 list/create, move and delete use the FILE-ONLY VK (BIFROST_VK_AIOS_HELPDESK_FILE)
 whose execute list is exactly [create-mail-folder, move-mail-message,
@@ -771,19 +779,39 @@ def ledger_new_since():
             since = fh.read().strip()
     except Exception:
         since = ""
+    # Merge intents+outcomes+reported into one row per id. The row that makes an
+    # item reportable is the OUTCOME row, but it carries only {id, folder,
+    # status} — the sender/subject/preview live on the earlier INTENT row the
+    # filer wrote write-ahead. Returning the bare outcome row is why the Filed
+    # block read "unknown — ;" for every filer-handled item. Field-merge them.
+    merged = ST.latest_by_id(rows)
     # Inclusive floor (>=), because `reported` is now the authoritative dedupe
     # gate: a row sharing the cursor's exact second is re-examined and then
-    # filtered out if already reported (see the entries loop below), instead of
-    # being skipped forever by a strict `>`. A wiped cursor therefore cannot
-    # re-report everything — the `reported` flag is what prevents that.
-    fresh_rows = [r for r in rows if r.get("ts", "") >= since]
-    entries = []
-    for r in fresh_rows:
-        if r.get("t") != "outcome" or r.get("reported"):
+    # filtered out if already reported, instead of being skipped forever by a
+    # strict `>`. A wiped cursor therefore cannot re-report everything — the
+    # `reported` flag is what prevents that. That flag must be read from the
+    # MERGED row: `ledger_mark_reported` appends its OWN row ({t,id,reported}),
+    # so the original filed/keep outcome row never carries the flag itself and
+    # checking it in isolation re-admitted the cursor-second rows every fire.
+    entries, seen = [], set()
+    for r in rows:
+        if r.get("t") != "outcome" or r.get("status") not in ("filed", "keep"):
             continue
-        if r.get("status") not in ("filed", "keep"):
+        mid = r.get("id")
+        if not mid or mid in seen:
             continue
-        entries.append(r)
+        m = merged.get(mid) or {}
+        if m.get("reported"):
+            continue
+        if r.get("ts", "") < since:
+            continue
+        seen.add(mid)
+        row = dict(m)
+        # Freshness/ordering keyed to the terminal row, not the intent: the
+        # cursor is advanced to the newest ts we consumed, so a later fire must
+        # compare against when the item became reportable.
+        row["ts"] = r.get("ts", "")
+        entries.append(row)
     return entries
 
 
@@ -882,6 +910,16 @@ def select_fresh(classified, reported, filed_set):
     return fresh
 
 
+def _sender_name(entry):
+    """Display name for a Filed-block line. Prefers the classified shape
+    (live inbox items and ledger rows adapted by ledger_to_classified), and
+    falls back to the flat ledger keys so a raw row never renders 'unknown'
+    when its sender IS known."""
+    ea = (entry.get("from") or {}).get("emailAddress") or {}
+    return (ea.get("name") or entry.get("sender_name")
+            or ea.get("address") or entry.get("sender_addr") or "unknown")
+
+
 def comment_body(digest_text, filed_counts, cleared_count, reported_ids):
     """Assemble the comment. TRACKER-FIRST layout: the hidden dedupe line goes
     immediately after the header, and only the model prose is eligible for
@@ -897,8 +935,8 @@ def comment_body(digest_text, filed_counts, cleared_count, reported_ids):
             names = ""
         else:
             names = "; ".join(
-                f"{(e.get('from') or {}).get('emailAddress', {}).get('name') or 'unknown'} — "
-                f"{e.get('subject', '')[:60]}" for e in entries[:6])
+                f"{_sender_name(e)} — {e.get('subject', '')[:60]}"
+                for e in entries[:6])
         count = entries if isinstance(entries, int) else len(entries)
         lines.append(f"- **{folder}** ({count}): {names}"
                      + (" …" if not isinstance(entries, int)
@@ -976,10 +1014,15 @@ def main():
     # only record that survives the move.
     ledger_entries = ledger_new_since()
     ledger_cls = ledger_to_classified(ledger_entries)
+    # Group filer-moved items by destination folder for the deterministic Filed
+    # block. These must be CLASSIFIED-shaped (from.emailAddress.name), because
+    # that is what comment_body renders — the raw ledger row carries a flat
+    # sender_name, which is why every filer-handled line used to render as
+    # "unknown — ;" (the content was there, just under a different key).
     ledger_filed = {}
-    for r in ledger_entries:
-        if r.get("folder") and r.get("folder") != "keep":
-            ledger_filed.setdefault(r["folder"], []).append(r)
+    for c in ledger_cls:
+        if c.get("_file") and c["_file"] != "keep":
+            ledger_filed.setdefault(c["_file"], []).append(c)
     if ledger_cls:
         log(f"ledger: {len(ledger_cls)} item(s) new since last digest "
             f"({sum(len(v) for v in ledger_filed.values())} filed by the filer)")
@@ -1053,8 +1096,10 @@ def main():
         f"privacy new: {len(privacy_new)} of {len(privacy)}; "
         f"digest notices kept: {kept_notices}")
 
+    # `ledger_filed` is excluded here too: a window where the filer filed mail
+    # is never an "all clear", even if the inbox now lists zero unread.
     if (not unread_count and not fresh and not plan and cleared == 0
-            and not privacy_new):
+            and not privacy_new and not ledger_filed):
         if not seen:
             log("morning all-clear")
             token = github_install_token()
@@ -1062,7 +1107,15 @@ def main():
         else:
             log("all clear (already posted today) — skipping")
         return
-    if not fresh and not plan and cleared == 0 and not privacy_new:
+    # A quiet window where the FILER (5-min leg) filed mail is NOT an empty
+    # fire: that mail is out of the inbox and invisible to the listing above,
+    # so without this trigger it would never be summarised by ANY fire. A
+    # filer-only fire posts just the deterministic Filed block (no prose model
+    # call — see the `fresh or privacy_new` branch below), which keeps the
+    # digest quiet on genuinely idle windows while never silently dropping the
+    # filer leg's work.
+    if (not fresh and not plan and cleared == 0 and not privacy_new
+            and not ledger_filed):
         log("nothing new since last fire — skipping post")
         return
 
