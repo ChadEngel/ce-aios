@@ -50,7 +50,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import jwt
 
@@ -485,23 +485,9 @@ def privacy_llm_keeps(cands):
 
 # ---------------------------------------------------------------- filing tier
 
-def folder_map():
-    data = graph_file("list-mail-folders", {"top": 100})
-    return {f["displayName"].lower(): f["id"] for f in (data.get("value") or [])}
-
-
-def ensure_folder(name):
-    fm = folder_map()
-    fid = fm.get(name.lower())
-    if fid:
-        return fid
-    graph_file("create-mail-folder", {"body": {"displayName": name}})
-    log(f"file: created folder: {name}")
-    time.sleep(1)
-    fid = folder_map().get(name.lower())
-    if not fid:
-        raise RuntimeError(f"folder create/list failed for {name}")
-    return fid
+# folder_map() and ensure_folder() are defined once above as thin delegators to
+# the engine's filing port (0.5.0). Local copies used to shadow them here; they
+# were dead and a trap for anyone editing the delegators, so they are gone.
 
 
 def file_items(plan):
@@ -759,22 +745,17 @@ def ledger_new_since():
     this, mail the filer handled would be filed correctly and NEVER summarised.
     The ledger is the only record that survives the move.
 
-    Returns (entries, first_boot). first_boot=True means there is no prior
-    report cursor: this is either the very first run or the ledger was rebuilt.
-    We then deliberately report NOTHING rather than dumping the entire backlog
-    into one digest — a 400-item first digest is unreadable and would bury the
-    genuinely new mail. The cursor is seeded and normal reporting starts from
-    the next fire.
+    Returns a list of entries. On first boot (no prior report cursor) it
+    seeds the cursor and returns an EMPTY list — we deliberately report nothing
+    rather than dumping the entire backlog into one digest: a 400-item first
+    digest is unreadable and would bury the genuinely new mail. Normal
+    reporting starts from the next fire.
     """
     import state as ST
     rows = ST.read_all(since_days=ST.RETENTION_SCAN_DAYS)
     if not rows:
-        return [], False
+        return []
     cursor_path = os.path.join(ST.STATE_DIR, "last_digest_report")
-    # Reconcile against what we have ALREADY posted, so a wiped cursor can
-    # never cause a re-report of everything.
-    already = ST.latest_by_id(rows)
-    done = {mid for mid, r in already.items() if r.get("reported")}
     if not os.path.exists(cursor_path):
         try:
             with open(cursor_path, "w", encoding="utf-8") as fh:
@@ -784,7 +765,7 @@ def ledger_new_since():
         except Exception as exc:
             log(f"ledger cursor seed failed: {str(exc)[:80]}")
         log("ledger: no report cursor — seeding, not dumping backlog this fire")
-        return [], True
+        return []
     try:
         with open(cursor_path, "r", encoding="utf-8") as fh:
             since = fh.read().strip()
@@ -792,9 +773,9 @@ def ledger_new_since():
         since = ""
     # Inclusive floor (>=), because `reported` is now the authoritative dedupe
     # gate: a row sharing the cursor's exact second is re-examined and then
-    # filtered out if already reported, instead of being skipped forever by a
-    # strict `>`. The reported flag is what prevents re-reporting, so a wider
-    # read window is strictly safer here.
+    # filtered out if already reported (see the entries loop below), instead of
+    # being skipped forever by a strict `>`. A wiped cursor therefore cannot
+    # re-report everything — the `reported` flag is what prevents that.
     fresh_rows = [r for r in rows if r.get("ts", "") >= since]
     entries = []
     for r in fresh_rows:
@@ -803,7 +784,7 @@ def ledger_new_since():
         if r.get("status") not in ("filed", "keep"):
             continue
         entries.append(r)
-    return entries, False
+    return entries
 
 
 def ledger_mark_reported(ids, cursor_ts=None):
@@ -993,7 +974,7 @@ def main():
     # digest would report only what the filer had not yet touched, and mail
     # filed minutes ago would never be summarised at all. The ledger is the
     # only record that survives the move.
-    ledger_entries, seeding = ledger_new_since()
+    ledger_entries = ledger_new_since()
     ledger_cls = ledger_to_classified(ledger_entries)
     ledger_filed = {}
     for r in ledger_entries:
@@ -1007,7 +988,6 @@ def main():
         # (they are not in the inbox any more).
         for c in ledger_cls:
             c["_file"] = None
-            c["_filed_by_filer"] = r_folder = c.get("_file")
         classified = ledger_cls + classified
 
     # Privacy in-flight tier. Layer 1 (deterministic) is already stamped by
