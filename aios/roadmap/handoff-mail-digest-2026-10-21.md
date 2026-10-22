@@ -68,7 +68,7 @@
 
 ```
 aios/mail/engine/{__init__,config,classify,filing,retention}.py   # the library (port+Config only)
-aios/mail/digest/{digest,filer,state,selftest_engine,selftest_state}.py  # legs + ledger + tests
+aios/mail/digest/{digest,filer,state,selftest_engine,selftest_state,selftest_digest}.py  # legs + ledger + tests
 aios/mail/digest/k8s/{cronjob,filer-cronjob,rules-configmap,infisical-secret-sync,state-pvc,networkpolicy}.yaml
 aios/mail/console/{console.py,selftest_console.py,Dockerfile,README.md,static/index.html}
 aios/mail/console/k8s/{console.yaml,kustomization.yaml}
@@ -115,6 +115,7 @@ cd aios/mail/digest && \
   DIGEST_ISSUE_NUMBER=1 GITHUB_REPO=o/r DIGEST_STATE_DIR=/tmp/t-$$ \
   python3 selftest_engine.py                            # 33
   python3 selftest_state.py                             # 21
+  python3 selftest_digest.py                            # 21 (new-only reporting + tracker safety)
 ```
 
 ## 7. INCIDENT 2026-10-21 14:23Z (the one thing not to repeat)
