@@ -140,5 +140,57 @@ check("folder preserved on the merged row",
 check("still settled after the reported row", ST.is_settled(merged["m3"]))
 check("m3 is now in the dedupe set", "m3" in D.ledger_reported_ids())
 
+print("== 8. filer-filed rows are reportable AND carry their content ==")
+# Regression: the filer writes an INTENT row (with sender/subject) write-ahead,
+# then a bare OUTCOME row ({t,id,folder,status}) when the move lands.
+# ledger_new_since() used to return the bare outcome row, so (a) the Filed block
+# rendered "unknown — ;" for every filer-handled item, and (b) the inclusive
+# >= cursor re-admitted rows forever because the `reported` flag lives on its
+# OWN appended row, never on the outcome row.
+ST.append({"t": "intent", "id": "f1", "folder": "Receipts",
+           "subject": "a receipt", "sender_name": "Acme",
+           "sender_addr": "billing@acme.test", "tier": "other"})
+ST.append({"t": "outcome", "id": "f1", "folder": "Receipts",
+           "status": "filed", "ts": "2026-10-22T10:00:00Z"})
+entries = D.ledger_new_since()
+f1 = [r for r in entries if r.get("id") == "f1"]
+check("filer-filed row is reportable (not skipped)", len(f1) == 1, entries)
+check("merged row keeps the sender from the intent row",
+      f1 and f1[0].get("sender_name") == "Acme", f1[:1])
+check("merged row keeps the subject from the intent row",
+      f1 and f1[0].get("subject") == "a receipt", f1[:1])
+
+# And once reported, it must never come back — even though the outcome row's ts
+# is exactly the cursor (the old inclusive-`>=` re-admission bug).
+D.ledger_mark_reported(["f1"], cursor_ts="2026-10-22T10:00:00Z")
+check("reported filer row does not resurface at the cursor second",
+      all(r.get("id") != "f1" for r in D.ledger_new_since()))
+
+print("== 9. a filer-only window is a POST trigger (quiet-window gap) ==")
+# The skip condition in main() must treat new filer-filed rows as a reason to
+# post, or mail the filer handled is silently never summarised by any fire.
+ledger_filed = {"Receipts": [D.ledger_to_classified(
+    [{"id": "f1", "folder": "Receipts", "sender_name": "Acme",
+      "subject": "a receipt"}])[0]]}
+fresh, plan, cleared, privacy_new = [], [], 0, []
+would_skip = (not fresh and not plan and cleared == 0 and not privacy_new
+              and not ledger_filed)
+check("filer-only window does NOT hit the 'nothing new' skip", not would_skip)
+check("truly idle window still skips",
+      (not [] and not [] and 0 == 0 and not [] and not {}))
+
+print("== 10. Filed block renders the sender, never 'unknown' ==")
+# Both shapes must render: the classified shape (live inbox + adapted ledger)
+# and a raw ledger row (flat sender_name).
+body = D.comment_body("prose", {"Receipts": ledger_filed["Receipts"]}, 0, [])
+check("adapted row renders its sender name", "Acme — a receipt" in body, body)
+raw = [{"sender_name": "Beta", "subject": "raw subject"}]
+body = D.comment_body("prose", {"Orders": raw}, 0, [])
+check("raw ledger row falls back to sender_name",
+      "Beta — raw subject" in body, body)
+check("address fallback when only an address is known",
+      "c@d.e" in D.comment_body("p", {"Orders": [
+          {"sender_addr": "c@d.e", "subject": "s"}]}, 0, []))
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

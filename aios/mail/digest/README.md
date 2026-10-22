@@ -76,9 +76,42 @@ already been reported and the loop compounded.
    re-reported everything once the thread passed 60 comments (~3 weeks at
    3 fires/day).
 
-Self-test: `selftest_digest.py` (21 checks) — reported items do not re-list,
+Self-test: `selftest_digest.py` (30 checks) — reported items do not re-list,
 new items report exactly once, duplicates collapse, the tracker and Filed block
 survive truncation, and the ledger `reported` flag round-trips.
+
+## Filer hand-off: quiet windows are not silent (0.5.5, 2026-10-22)
+
+**Bug (pre-existing, surfaced by the 0.5.4 verification):** mail the FILER
+handled was never summarised if it arrived in a window where the 3x/day fire
+had nothing else to say. The filer (every 5 min) MOVES mail out of the inbox,
+so the digest can only learn about it from the ledger — but the post-skip
+condition in `main()` consulted only the inbox-derived tiers (`fresh`/`plan`/
+`privacy_new`). A window with 19 filer-filed items therefore logged
+`nothing new since last fire — skipping post` and posted nothing, leaving those
+rows unreported (and, because the skip returns before the cursor advance, the
+backlog re-accumulated).
+
+**Fixes (all in `digest.py`):**
+1. New filer-filed ledger rows are a **post trigger**. A filer-only fire posts
+   just the deterministic Filed block — the prose model is not called at all
+   (`summary` falls back to "No prose this fire …" because `fresh` and
+   `privacy_new` are both empty), so a genuinely idle window stays quiet while
+   the 5-min leg's work is never silently dropped. The all-clear branch is
+   gated the same way, so "inbox is clear" cannot mask a filer-filed backlog.
+2. `ledger_new_since()` now returns the **field-merged** row per id, not the
+   bare outcome row. The filer writes an INTENT row (sender/subject/preview)
+   write-ahead and a bare `{t,id,folder,status}` OUTCOME row on success; the
+   Filed block rendered the outcome row, so every filer-handled line read
+   `unknown — ;`. The content was on disk the whole time, under a different key.
+3. The `reported` check moved to the merged row. `ledger_mark_reported()`
+   appends its OWN row, so the outcome row never carries the flag — checking it
+   in isolation made the inclusive (`>=`) cursor re-admit rows sitting on the
+   cursor second on every fire.
+4. `comment_body()` resolves the sender through `_sender_name()`, which reads
+   the classified shape (`from.emailAddress.name`) and falls back to the flat
+   ledger keys (`sender_name`/`sender_addr`) — so neither shape can render
+   `unknown` when the sender is known.
 
 ## Privacy in-flight tier (0.3.3, 2026-10-18)
 

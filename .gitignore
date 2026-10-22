@@ -14,3 +14,6 @@ Thumbs.db
 *.env
 secrets/
 *.local.*
+# Python bytecode (never commit)
+__pycache__/
+*.py[cod]
