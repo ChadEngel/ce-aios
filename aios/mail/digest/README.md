@@ -76,11 +76,11 @@ already been reported and the loop compounded.
    re-reported everything once the thread passed 60 comments (~3 weeks at
    3 fires/day).
 
-Self-test: `selftest_digest.py` (30 checks) — reported items do not re-list,
+Self-test: `selftest_digest.py` (32 checks) — reported items do not re-list,
 new items report exactly once, duplicates collapse, the tracker and Filed block
 survive truncation, and the ledger `reported` flag round-trips.
 
-## Filer hand-off: quiet windows are not silent (0.5.5, 2026-10-22)
+## Filer hand-off: quiet windows are not silent (0.5.5–0.5.6, 2026-10-22)
 
 **Bug (pre-existing, surfaced by the 0.5.4 verification):** mail the FILER
 handled was never summarised if it arrived in a window where the 3x/day fire
@@ -112,6 +112,11 @@ backlog re-accumulated).
    the classified shape (`from.emailAddress.name`) and falls back to the flat
    ledger keys (`sender_name`/`sender_addr`) — so neither shape can render
    `unknown` when the sender is known.
+5. A SKIPPED fire still advances the report cursor (`_advance_cursor()`). Some
+   ledger rows can never be reported — the digest's own notification mail is
+   `_self_notice` and excluded from every tier — so without this the cursor
+   stayed pinned behind them and every later fire re-scanned a growing
+   backlog. Safe because `reported`, not the cursor, is the dedupe gate.
 
 ## Privacy in-flight tier (0.3.3, 2026-10-18)
 
