@@ -815,6 +815,32 @@ def ledger_new_since():
     return entries
 
 
+def _advance_cursor(entries):
+    """Move the report cursor to the newest ledger row we just scanned.
+
+    Used on the SKIP path, where nothing was postable. Some ledger rows can
+    never be reported by design — the digest's own GitHub notification mail is
+    classified `_self_notice` and excluded from every tier — and without this
+    the cursor stays pinned behind them, so every later fire re-scans a
+    growing backlog. Only meaningful because `reported` is the authoritative
+    dedupe gate: the cursor is a scan floor, not a correctness boundary.
+    Rows the filer writes DURING this fire carry a newer ts and stay visible.
+    """
+    ts = max((r.get("ts", "") for r in entries), default=None)
+    if not ts:
+        return
+    import state as ST
+    path = os.path.join(ST.STATE_DIR, "last_digest_report")
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(ts + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        log(f"cursor: advanced to {ts} (skipped fire)")
+    except Exception as exc:
+        log(f"cursor advance (skip) failed: {str(exc)[:80]}")
+
+
 def ledger_mark_reported(ids, cursor_ts=None):
     """Record `reported` durably for EVERY id this fire summarised, and advance
     the report cursor. Marking all reported ids (not just ledger-originated
@@ -1106,6 +1132,7 @@ def main():
             github_comment("No unread mail — inbox is clear.", {}, 0, [], token)
         else:
             log("all clear (already posted today) — skipping")
+        _advance_cursor(ledger_entries)
         return
     # A quiet window where the FILER (5-min leg) filed mail is NOT an empty
     # fire: that mail is out of the inbox and invisible to the listing above,
@@ -1117,6 +1144,12 @@ def main():
     if (not fresh and not plan and cleared == 0 and not privacy_new
             and not ledger_filed):
         log("nothing new since last fire — skipping post")
+        # Advance the cursor even on a skip. Without this the cursor stays
+        # pinned behind rows that can NEVER be reported (the digest's own
+        # notification mail: kept in the inbox, `_self_notice`, excluded from
+        # every tier), so every later fire re-scans an ever-growing backlog.
+        # Rows written DURING this fire stay newer than the advanced cursor.
+        _advance_cursor(ledger_entries)
         return
 
     counts = file_items(plan)
