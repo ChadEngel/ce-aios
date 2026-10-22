@@ -192,5 +192,20 @@ check("address fallback when only an address is known",
       "c@d.e" in D.comment_body("p", {"Orders": [
           {"sender_addr": "c@d.e", "subject": "s"}]}, 0, []))
 
+print("== 11. a SKIPPED fire still advances the cursor (no permanent stall) ==")
+# The digest's own notification mail is journaled as a `keep` row but is
+# excluded from every tier (_self_notice), so it can NEVER be reported. If the
+# skip path returned without advancing, the cursor would stay pinned behind it
+# and every later fire would re-scan a growing backlog.
+D._advance_cursor([{"id": "s1", "ts": "2026-10-22T11:00:00Z"}])
+check("skip path advanced the cursor",
+      open(os.path.join(TMP, "last_digest_report")).read().strip()
+      == "2026-10-22T11:00:00Z",
+      open(os.path.join(TMP, "last_digest_report")).read().strip())
+before = open(os.path.join(TMP, "last_digest_report")).read()
+D._advance_cursor([])
+check("nothing to advance is a no-op (cursor unchanged)",
+      open(os.path.join(TMP, "last_digest_report")).read() == before)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
