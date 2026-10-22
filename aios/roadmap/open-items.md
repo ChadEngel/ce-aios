@@ -1,5 +1,10 @@
 # Open items (priority order) — refreshed 2026-10-06
 
+> **Mail-digest pickup (2026-10-21):** session context + runbook for the
+> digest/console arc lives in `handoff-mail-digest-2026-10-21.md` — start
+> THERE for anything under `aios/mail/`. PR #65 merged (engine + config
+> store + read-only console 0.6.0 live).
+
 > **Live queue moved to GitHub Issues** (`ChadEngel/ce-aios`) — see `manager-agent.md`. The tables below are the human-readable mirror; if they disagree with the issue tracker, **the issues win**.
 
 Status key: OPEN · BLOCKED · NEXT · PARKED · DONE?
