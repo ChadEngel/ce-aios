@@ -48,3 +48,12 @@ data:
   # mail stays in the inbox — never filed, never deleted.
   DIGEST_NOTICE_SENDERS: "notifications@github.com"
   DIGEST_NOTICE_SUBJECTS: "AIOS daily mail digest"
+  # Digest cadence (R1, user-scheduled — never hard-coded). Consumed by the
+  # schedule reconciler on the filer heartbeat, which PATCHes the digest
+  # CronJob when these differ from its spec. Values mirror the historic
+  # manifest constant so introducing them is behaviour-neutral.  The
+  # CronJob's OWN spec is the live truth until the first reconcile; after
+  # that config wins. 1-fire/hour floor + croniter validation live in
+  # engine/schedule.py and run at every save/load.
+  DIGEST_SCHEDULE: "0 5,12,17 * * *"
+  DIGEST_TZ: "America/Chicago"

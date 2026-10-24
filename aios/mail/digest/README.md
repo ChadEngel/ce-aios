@@ -118,6 +118,47 @@ backlog re-accumulated).
    stayed pinned behind them and every later fire re-scanned a growing
    backlog. Safe because `reported`, not the cursor, is the dedupe gate.
 
+## User-scheduled cadence (R1, 0.6.0, 2026-10-23)
+
+The digest cadence used to be a constant in `cronjob.yaml`. R1 moves it into
+the versioned config store as `digest_schedule` + `digest_tz`, and adds a
+reconciler that keeps the CronJob in sync — so "I want my digest at 7am and
+6pm in my timezone" is a config change the system self-applies, not a hand
+edit of a manifest.
+
+**How it fits together:**
+- `engine/schedule.py` — the ONE definition of a valid cadence: croniter
+  parse + timezone resolve + a **1-fire/hour floor**. Called from
+  `Config.validate()`, so an invalid or hammering schedule is refused at SAVE
+  time (the console's save path) and can never be persisted or applied.
+- `digest/schedule_reconciler.py` — runs on the **filer's 5-min heartbeat**
+  (called from `filer.py`, before paging). GET the digest CronJob, compare
+  schedule+tz, PATCH only on a diff (idempotent; a matching schedule is
+  silent). Standalone for debugging: `python3 schedule_reconciler.py
+  [--dry-run]`.
+- **Fail-safe:** every error is caught. A failed read/patch logs loudly and
+  leaves the CronJob on its PREVIOUS schedule; the digest may pause, but
+  filing and retention (the filer's job) are never affected. An invalid
+  config schedule is refused before any API call.
+- **RBAC** (`k8s/schedule-rbac.yaml`): a ServiceAccount `aios-mail-filer`
+  bound to a Role granting `get`+`patch` on **exactly** `batch/cronjobs:
+  aios-mail-digest` (`resourceNames`). No create/delete, no other object,
+  namespace-scoped. The filer also gets its own NetworkPolicy egress on 6443
+  for the API server (it had none before).
+- **DST correctness:** fires are computed in the schedule's wall-clock and
+  localized, because croniter's tz-aware mode drifts (a "5am" daily fire
+  becomes 6am on the US fall-back day). k8s `timeZone` does NOT drift, so a
+  naive preview would show times the CronJob never fires. Self-tested across
+  the Nov 2026 transition.
+- **Console:** the cadence + next-5-fires render read-only on the dashboard
+  (the console still has NO write path — it reports what the reconciler will
+  enforce; the schedule is editable only in the config store / a future UI).
+
+Self-test: `selftest_schedule.py` (14 checks) — pure plan is loop-free,
+idempotent, patches once on drift, and every error path leaves the CronJob
+alone (stub API server). Engine selftest adds the schedule-validation block
+(invalid cron/tz, >1/hour refused, hourly allowed, DST pinned).
+
 ## Privacy in-flight tier (0.3.3, 2026-10-18)
 
 While Chad is actively clearing personal data from broker sites, opt-out /
@@ -173,13 +214,13 @@ are unreachable even at the daemon level.
    and volume lifecycle edits are off-limits for this PVC.
 
 1. **Build the image (amd64 — workers run it):**
-   `docker buildx build --platform linux/amd64 --load -t caehomelab/aios-mail-digest:0.4.0 aios/mail/digest/`
+   `docker buildx build --platform linux/amd64 --load -t caehomelab/aios-mail-digest:0.6.0 --file aios/mail/digest/Dockerfile aios/mail/`
 2. **Import on BOTH amd64 workers** (k3s import is node-local, and
    `nodeSelector: kubernetes.io/arch: amd64` pins both legs to those nodes):
    ```bash
-   docker save caehomelab/aios-mail-digest:0.4.0 | \
+   docker save caehomelab/aios-mail-digest:0.6.0 | \
      ssh cengel@192.168.30.60  'sudo -n k3s ctr -n k8s.io images import -'
-   docker save caehomelab/aios-mail-digest:0.4.0 | \
+   docker save caehomelab/aios-mail-digest:0.6.0 | \
      ssh cengel@192.168.30.251 'sudo -n k3s ctr -n k8s.io images import -'
    ```
 3. **Human prerequisites (Chad, once):**

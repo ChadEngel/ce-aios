@@ -173,5 +173,31 @@ print(f"  (middleware auth exercised at runtime; direct-call path open by "
       f" design: {refused or 'n/a'})")
 C.PASSWORD = ""
 
+print("== 6. schedule view (R1) = read-only cadence + next fires ==")
+s3 = C._state_payload()
+sch = s3["config"].get("schedule", {})
+check("schedule present in config view", bool(sch.get("schedule")), sch)
+check("schedule valid + 5 next fires",
+      sch.get("valid") is True and len(sch.get("next", [])) == 5, sch)
+check("schedule keys exposed for provenance",
+      "digest_schedule" in kc and "digest_tz" in kc, list(kc)[-3:])
+
+print("== 7. dry-run refuses an invalid schedule, writes nothing ==")
+before3 = _tree_hash()
+for bad_sched in ({"digest_schedule": "* * * * *"},
+                  {"digest_schedule": "not cron"},
+                  {"digest_tz": "Mars/Olympus"}):
+    try:
+        C.api_dryrun(Req(overrides=bad_sched))
+        check(f"refused {bad_sched}", False, "accepted")
+    except Exception as exc:
+        check(f"refused {bad_sched}(400)",
+              getattr(exc, "status_code", 0) == 400, str(exc)[:80])
+check("state still byte-identical after schedule refusals",
+      _tree_hash() == before3)
+r_ok = C.api_dryrun(Req(overrides={"digest_schedule": "0 7,18 * * *"}))
+check("valid schedule override accepted in preview",
+      "changed" in r_ok and _tree_hash() == before3)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

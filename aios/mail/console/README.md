@@ -1,4 +1,4 @@
-# AIOS Inbox Console — read-only dashboard + dry-run preview (0.6.0)
+# AIOS Inbox Console — read-only dashboard + dry-run preview (0.6.1)
 
 The web front end of `aios/mail/`. One box, one mailbox (D4). This app has
 **no mutation endpoints** — it can never move, delete, or send mail, and the
@@ -16,6 +16,10 @@ What it shows (`GET /api/state`):
 - **Config journal (D5)**: last config saves (actor/timestamp/version).
 - **Fire status**: filer/digest CronJob schedules, last fire, ok/failed
   (in-cluster read-only serviceaccount; Role = get/list batch only).
+- **Digest cadence (R1)**: the effective `digest_schedule` + `digest_tz` and
+  the next 5 fire times, so the dashboard reflects what the filer-heartbeat
+  reconciler enforces. Read-only — the console only reports it; validation
+  (croniter + 1-fire/hour floor) runs when the config store is loaded.
 
 What it computes (`POST /api/dryrun`, no persistence anywhere):
 - **Dry-run preview**: a hypothetical config (validated, unknown keys and
@@ -33,13 +37,14 @@ not in the same image.
 ## Files
 - `console.py` — FastAPI app (auth, `/api/state`, `/api/dryrun`)
 - `static/index.html` — single-page dark UI
-- `selftest_console.py` — offline tests incl. byte-identical state-dir proof
+- `selftest_console.py` — offline tests (28) incl. byte-identical state-dir
+  proof and schedule-view/dry-run-refusal coverage
 - `k8s/` — SA + read-only Role + Deployment + NodePort Service + netpol
 
 ## Build & deploy
 ```bash
 docker buildx build --platform linux/amd64 --load \
-  -t caehomelab/aios-mail-console:0.6.0 \
+  -t caehomelab/aios-mail-console:0.6.1 \
   --file aios/mail/console/Dockerfile aios/mail/
 
 kubectl -n ai create secret generic aios-console-auth \

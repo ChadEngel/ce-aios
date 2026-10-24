@@ -12,6 +12,7 @@ Modules:
   classify.py  deterministic bucketing (the model NEVER classifies)
   filing.py    folder-map/ensure/move/delete primitives over the port
   retention.py bounded soft-delete clear with the F5 ledger-confirmation gate
+  schedule.py  cron/timezone validation + next-fire maths for the digest cadence
 
 Invariants carried over from 0.4.0, unchanged:
   - Filing is recoverable; missing mail is not. Mutations are logged before

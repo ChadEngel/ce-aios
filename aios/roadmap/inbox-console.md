@@ -92,10 +92,20 @@ The console is the missing management surface. The engine (deterministic classif
 Two requirements stated directly for the console; both feed the editing
 milestones (M2+) as first-class screens.
 
-**R1 — user-scheduled digests (never hard-coded).** Today the cadence is a
-manifest constant (`0 5,12,17 * * *` America/Chicago on aios-mail-digest).
-Plan: `digest_schedule` + `digest_tz` move INTO the versioned config store,
-consumed by a tiny reconciler that patches the digest CronJob. Design notes:
+**R1 — user-scheduled digests (never hard-coded).** ✅ **SHIPPED 0.6.0,
+2026-10-23** — built exactly to this spec. `digest_schedule` + `digest_tz`
+live in the config store; `engine/schedule.py` validates them at save/load
+(croniter + timezone + 1-fire/hour floor); `digest/schedule_reconciler.py`
+runs on the filer heartbeat and PATCHes the digest CronJob only on drift
+(idempotent, fail-safe: errors leave the previous schedule, never touch
+filing/retention). RBAC = get+patch on exactly `batch/cronjobs:
+aios-mail-digest` (k8s/schedule-rbac.yaml); filer gets its own netpol with
+6443 egress. Console renders the cadence + next-5-fires read-only (still no
+write path). DST-corrected (croniter's aware mode drifts across fall-back —
+fire times are computed in wall-clock and localized; self-tested). Tests:
+selftest_schedule 14, engine +16 (49 total), console +8 (28 total).
+
+Original design notes (still accurate):
 - The reconciler runs on the filer's heartbeat (every 5 min): load config,
   compare CronJob spec vs config, PATCH only on diff. Needs an RBAC Role
   scoped to exactly `patch`/`update` on `batch/cronjobs: aios-mail-digest`.

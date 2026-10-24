@@ -39,13 +39,16 @@ spec:
             app: aios-mail-filer
         spec:
           restartPolicy: Never
+          # R1: the filer heartbeat also reconciles the digest CronJob's
+          # schedule (schedule-rbac.yaml grants get/patch on that one object).
+          serviceAccountName: aios-mail-filer
           # amd64 workers only: the image is imported node-locally
           # (imagePullPolicy: Never). Keep the tag identical on BOTH workers.
           nodeSelector:
             kubernetes.io/arch: amd64
           containers:
             - name: filer
-              image: caehomelab/aios-mail-digest:0.5.6
+              image: caehomelab/aios-mail-digest:0.6.0
               imagePullPolicy: Never
               command: ["python3", "/app/filer.py"]
               envFrom:
@@ -68,6 +71,10 @@ spec:
                   value: "100"
                 - name: FILER_MOVE_SLEEP
                   value: "0.35"
+                # R1 schedule reconciler: real k3s API endpoint (svc/kubernetes
+                # :443 refuses from worker pods; the server node answers here).
+                - name: AIOS_K8S_URL
+                  value: "https://192.168.30.217:6443"
               volumeMounts:
                 - name: state
                   mountPath: /state

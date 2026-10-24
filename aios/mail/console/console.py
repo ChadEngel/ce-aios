@@ -43,6 +43,7 @@ for _p in (APP_DIR, PARENT):
 
 import state as ST                          # noqa: E402  (ledger contract)
 from engine import config as ECFG           # noqa: E402
+from engine import schedule as SCHED        # noqa: E402
 from engine.classify import Classifier      # noqa: E402
 
 STATE_DIR = os.environ.get("DIGEST_STATE_DIR", "/state")
@@ -175,7 +176,8 @@ def _config_view():
     return {"version": current.version, "source": current.source,
             "prose_model": current.prose_model,
             "privacy_model": current.privacy_model, "keys": keys,
-            "file_keys": sorted(file_values), "journal": journal}
+            "file_keys": sorted(file_values), "journal": journal,
+            "schedule": _schedule_view(current)}
 
 
 # --------------------------------------------------------------------------
@@ -222,6 +224,22 @@ def _k8s_status():
 # --------------------------------------------------------------------------
 # dashboard payload
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# schedule view (R1) — read-only here; the reconciler applies it
+# --------------------------------------------------------------------------
+def _schedule_view(current):
+    """The digest cadence from the config store plus the next fires, so the
+    dashboard reflects what the reconciler is enforcing. Pure: this only
+    FORMATS; the reconciler on the filer heartbeat owns apply (the console
+    still has no mutation path)."""
+    d = SCHED.describe(current.digest_schedule, current.digest_tz, n=5)
+    return {"schedule": current.digest_schedule, "tz": current.digest_tz,
+            "valid": d.get("valid"), "error": d.get("error"),
+            "next": d.get("next", []), "advisories": d.get("advisories", []),
+            "note": "applied by the filer-heartbeat reconciler; the console "
+                    "only reports it (no write path)"}
+
+
 def _state_payload():
     merged, rows = _merged()
     filed = {}

@@ -6,5 +6,6 @@ resources:
   - state-pvc.yaml
   - networkpolicy.yaml
   - rules-configmap.yaml
+  - schedule-rbac.yaml
   - cronjob.yaml
   - filer-cronjob.yaml

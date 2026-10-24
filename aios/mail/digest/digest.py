@@ -269,8 +269,10 @@ def _apply(cfg):
     MODEL = cfg.prose_model or os.environ.get(
         "DIGEST_MODEL", "ollama/muse-glimmer:latest")
     MODEL_PRIV = cfg.privacy_model or MODEL
+    set_tz(cfg.digest_tz)
     log(f"config: {cfg.version} (source={cfg.source}, "
-        f"prose={MODEL}, privacy={MODEL_PRIV})")
+        f"prose={MODEL}, privacy={MODEL_PRIV}, "
+        f"schedule={cfg.digest_schedule} {cfg.digest_tz})")
 
 
 def apply_config():
@@ -280,9 +282,21 @@ def apply_config():
 
 try:
     from zoneinfo import ZoneInfo
-    TZ = ZoneInfo("America/Chicago")
+    TZ = ZoneInfo(os.environ.get("DIGEST_TZ", "America/Chicago"))
 except Exception:
     TZ = None
+
+
+def set_tz(name):
+    """Follow the config store's digest_tz for display timestamps (R1).
+    Called from _apply so the digest's local_now()/datestamps agree with the
+    schedule the reconciler enforces — a mismatch would be confusing but not
+    dangerous (this only affects formatting, never when the job runs)."""
+    global TZ
+    try:
+        TZ = ZoneInfo(name) if ZoneInfo else TZ
+    except Exception:
+        log(f"digest_tz {name!r} unusable — keeping {TZ}")
 
 
 def local_now():
