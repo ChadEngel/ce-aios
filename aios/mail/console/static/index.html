@@ -69,6 +69,18 @@
   </section>
 
   <section>
+    <h2>Models <span class="chip">R2 · local-only</span></h2>
+    <div id="models" class="mini">loading…</div>
+    <p class="mini" style="margin-top:8px">Two touchpoints: <b>prose</b>
+    composes the digest (plain instruct, ≥ 8k context, temp 0.2–0.3,
+    <code>reasoning_effort: none</code>); <b>privacy</b> runs the keep-pass
+    (must return only a JSON integer array). <b>Local models only</b> — mail
+    never leaves the cluster, and a remote id is refused at save time. The
+    catalogue is fetched by the filer (which holds the gateway key) and cached
+    to /state; this console holds no key and makes no LLM calls.</p>
+  </section>
+
+  <section>
     <h2>Effective rules <span id="confsrc" class="chip"></span></h2>
     <table id="rules"><thead>
       <tr><th>Key</th><th>Value</th><th>Origin</th></tr>
@@ -170,6 +182,26 @@ async function load() {
       + (cad.next||[]).map(x=>`<code style="margin-right:6px">${esc(ts(x))}</code>`).join('')
       + '</div>'
       + (cad.advisories||[]).map(a=>`<div class="mini" style="color:var(--warn,#e0b050)">⚠ ${esc(a)}</div>`).join('');
+
+  const M = s.config.models || {};
+  const roleLine = (r,label) => {
+    const d = M[r] || {};
+    const cls = d.level==='error' ? 'err' : (d.level==='warn' ? '' : 'ok');
+    return `<div style="margin-bottom:6px"><b>${label}</b>: <code>${esc(d.model||'(empty → inherits prose)')}</code>`
+      + ` <span class="${cls}">${d.level==='error'?'✗':(d.level==='warn'?'⚠':'✓')}</span></div>`
+      + (d.notes||[]).map(n=>`<div class="mini">· ${esc(n)}</div>`).join('');
+  };
+  const catRows = (M.models||[]).map(m =>
+    `<tr><td><code>${esc(m.id)}</code></td>
+     <td>${m.context_length?m.context_length:'—'}</td>
+     <td>${m.local?'<span class="origin env">local</span>':'<span class="origin">remote</span>'}</td>
+     <td>${m.prose.level==='error'?'<span class="err">✗</span>':(m.prose.level==='warn'?'⚠':'✓')}</td>
+     <td>${m.privacy.level==='error'?'<span class="err">✗</span>':(m.privacy.level==='warn'?'⚠':'✓')}</td></tr>`).join('');
+  document.getElementById('models').innerHTML = roleLine('prose_model','prose')
+    + roleLine('privacy_model','privacy')
+    + (M.stale ? '<div class="mini">catalogue not cached yet — the next filer heartbeat fetches it</div>'
+       : `<div style="margin-top:8px">catalogue ${esc(M.catalog_ts||'?')} · ${(M.models||[]).length} models</div>`
+         + `<table style="margin-top:6px"><thead><tr><th>model</th><th>ctx</th><th>where</th><th>prose</th><th>privacy</th></tr></thead><tbody>${catRows}</tbody></table>`);
 
   document.getElementById('journal').innerHTML = !s.config.journal.length
     ? 'no changes yet — env-manifest in force (loading config.yaml for the first time records a save here)'

@@ -118,11 +118,22 @@ Original design notes (still accurate):
 - Config-schema note: the fields ship WITH the reconciler only — never inert
   keys (engine/config.py documents this).
 
-**R2 — per-user LLM connection ("more individualized").** The two model
-knobs are NOW LIVE in the config store (0.5.1): `prose_model` (digest prose,
-digest leg) and `privacy_model` (privacy keep-pass, empty string = inherit
-prose). Both legs log the effective models on the `config:` line and the
-comment footer credits the real model. UI picker requirements:
+**R2 — per-user LLM connection ("more individualized").** ✅ **SHIPPED
+0.6.1/0.6.2, 2026-10-24** — `engine/models.py` validates every model choice
+at save time: **local-only is structural** (provider prefix, `ollama/` by
+default; a remote id is REFUSED for both legs like a negative retention day), empty
+privacy inherits prose, empty prose is refused. `describe_choice()` grades
+suitability (`error` for remote or prose context <8k; `warn` for unknown
+context/absent from catalogue) so the UI shows exactly what the engine
+enforces. The catalogue is fetched by the FILER (which holds the gateway key)
+on its heartbeat and cached to `/state/model-catalog.json` — the console reads
+it read-only, preserving its "no VK, never calls the LLM gateway" boundary.
+Console shows current choices + the catalogue with per-model prose/privacy
+verdicts. Local prefixes extend via `DIGEST_LOCAL_MODEL_PREFIXES` (env/infra,
+not a config key — a user must not widen where mail may go). Tests:
+selftest_models 14 (new), engine +27 (76), console +13 (41).
+
+Original design notes (implemented):
 - List models from the gateway's `/v1/models` (OpenAI-compatible); show a
   "what this model does here" panel per field (guidance below).
 - What the model needs to be able to do:

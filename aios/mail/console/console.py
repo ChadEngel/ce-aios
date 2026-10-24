@@ -42,8 +42,10 @@ for _p in (APP_DIR, PARENT):
         sys.path.insert(0, _p)
 
 import state as ST                          # noqa: E402  (ledger contract)
+import model_catalog as MODCAT              # noqa: E402  (R2: cached catalog)
 from engine import config as ECFG           # noqa: E402
 from engine import schedule as SCHED        # noqa: E402
+from engine import models as MODELS         # noqa: E402
 from engine.classify import Classifier      # noqa: E402
 
 STATE_DIR = os.environ.get("DIGEST_STATE_DIR", "/state")
@@ -177,7 +179,8 @@ def _config_view():
             "prose_model": current.prose_model,
             "privacy_model": current.privacy_model, "keys": keys,
             "file_keys": sorted(file_values), "journal": journal,
-            "schedule": _schedule_view(current)}
+            "schedule": _schedule_view(current),
+            "models": _models_view(current)}
 
 
 # --------------------------------------------------------------------------
@@ -238,6 +241,24 @@ def _schedule_view(current):
             "next": d.get("next", []), "advisories": d.get("advisories", []),
             "note": "applied by the filer-heartbeat reconciler; the console "
                     "only reports it (no write path)"}
+
+
+def _models_view(current):
+    """R2 model picker data. The catalogue is the CACHE the filer legs wrote
+    to /state — this console holds no Bifrost VK and never calls the gateway,
+    so it only ever reads what a leg already fetched (see model_catalog.py).
+    Suitability is computed with the same engine.models rules that gate a
+    save, so the UI cannot show a choice the engine would refuse."""
+    meta = MODCAT.read_cache_meta(STATE_DIR)
+    catalog = meta.get("models") or []
+    out = MODELS.catalog_summary(catalog, current.prose_model,
+                                 current.privacy_model)
+    out["catalog_ts"] = meta.get("ts")
+    out["catalog_url"] = meta.get("url")
+    out["stale"] = not catalog
+    out["note"] = ("catalogue cached by the filer heartbeat (this console "
+                    "holds no gateway key and makes no LLM calls)")
+    return out
 
 
 def _state_payload():

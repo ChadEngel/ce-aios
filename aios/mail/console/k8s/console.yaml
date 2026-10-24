@@ -1,4 +1,4 @@
-# AIOS Inbox Console — READ-ONLY (0.6.1).
+# AIOS Inbox Console — READ-ONLY (0.6.2).
 # One box = one mailbox (D4): this service mounts the SAME /state PVC as the
 # digest/filer legs, but READ-ONLY — a bug here cannot corrupt the ledger,
 # and no endpoint in the image writes to disk at all.
@@ -65,7 +65,7 @@ spec:
         kubernetes.io/os: linux
       containers:
         - name: console
-          image: caehomelab/aios-mail-console:0.6.1
+          image: caehomelab/aios-mail-console:0.6.2
           imagePullPolicy: Never
           ports:
             - containerPort: 8080

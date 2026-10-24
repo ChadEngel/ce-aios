@@ -199,5 +199,48 @@ r_ok = C.api_dryrun(Req(overrides={"digest_schedule": "0 7,18 * * *"}))
 check("valid schedule override accepted in preview",
       "changed" in r_ok and _tree_hash() == before3)
 
+print("== 8. models view (R2) = cached catalogue, no gateway call ==")
+s4 = C._state_payload()
+mv = s4["config"].get("models", {})
+check("models view present", "models" in mv and "prose_model" in mv, mv)
+check("empty catalogue -> stale flag, prose still described",
+      mv.get("stale") is True and mv["prose_model"].get("ok") is True, mv)
+check("privacy model local + described (ok despite absent catalogue)",
+      mv["privacy_model"].get("ok") is True
+      and mv["privacy_model"].get("local") is True, mv["privacy_model"])
+# seed a catalogue the way the filer would, then re-read
+import model_catalog as MC  # noqa: E402
+from engine import models as MODELS  # noqa: E402
+cat = MODELS.parse_catalog({"data": [
+    {"id": "ollama/qwen3.8:latest", "context_length": 32000},
+    {"id": "openrouter/auto"}]})
+MC.write_cache(TMP, cat, "https://llm.caehomelab.com/v1/models")
+s5 = C._state_payload()
+mv2 = s5["config"]["models"]
+check("catalogue now non-stale", mv2["stale"] is False, mv2)
+check("2 models listed", len(mv2["models"]) == 2, mv2["models"])
+remote = next(m for m in mv2["models"] if m["id"] == "openrouter/auto")
+check("remote model flagged error for prose",
+      remote["prose"]["level"] == "error", remote)
+localm = next(m for m in mv2["models"] if m["id"].startswith("ollama/"))
+check("local model ok for prose", localm["prose"]["ok"], localm)
+check("catalogue timestamp surfaced", bool(mv2.get("catalog_ts")), mv2)
+
+print("== 9. dry-run refuses a remote model, writes nothing ==")
+before4 = _tree_hash()
+for bad_model in ({"prose_model": "openrouter/auto"},
+                  {"privacy_model": "gpt-4o"},
+                  {"prose_model": ""}):
+    try:
+        C.api_dryrun(Req(overrides=bad_model))
+        check(f"refused {bad_model}", False, "accepted")
+    except Exception as exc:
+        check(f"refused {bad_model}(400)",
+              getattr(exc, "status_code", 0) == 400, str(exc)[:80])
+check("state byte-identical after model refusals", _tree_hash() == before4)
+r_m = C.api_dryrun(Req(overrides={"prose_model": "ollama/qwen3.6:latest"}))
+check("valid local model override accepted in preview",
+      "changed" in r_m and _tree_hash() == before4)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

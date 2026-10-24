@@ -227,7 +227,91 @@ d3 = SCHED.describe("0 5 * * *", "America/Chicago")  # minute 0 == filer heartbe
 check("filer minute advisory is advisory-only (still valid)",
       d3["valid"] and d3["advisories"], d3)
 
-print("== 7. retention gate (F5) with a fake graph ==")
+print("== 7. model catalogue + locality rules (R2) ==")
+from engine import models as MODELS  # noqa: E402
+
+# locality: only the local prefix is local; anything else is remote
+check("ollama/* is local", MODELS.is_local("ollama/qwen3.8:latest"))
+check("openrouter/* is remote", not MODELS.is_local("openrouter/auto"))
+check("bare name is remote", not MODELS.is_local("gpt-4o"))
+check("empty is not local", not MODELS.is_local(""))
+
+# validate_choice: remote refused for BOTH roles; empty allowed for privacy only
+for bad in ("openrouter/auto", "gpt-4o", "openai/gpt-4"):
+    for role in ("prose", "privacy"):
+        try:
+            MODELS.validate_choice(bad, role)
+            check(f"refuse remote {bad} as {role}", False, "accepted")
+        except ValueError:
+            check(f"refuse remote {bad} as {role}", True)
+try:
+    MODELS.validate_choice("", "prose")
+    check("refuse empty prose model", False, "accepted")
+except ValueError:
+    check("refuse empty prose model", True)
+check("empty privacy model allowed (inherits prose)",
+      MODELS.validate_choice("", "privacy") == "")
+check("local model accepted",
+      MODELS.validate_choice("ollama/qwen3.8:latest", "prose")
+      == "ollama/qwen3.8:latest")
+
+# Config.validate() enforces locality end-to-end (save-time gate)
+for bad in ({"prose_model": "openrouter/auto"},
+            {"privacy_model": "gpt-4o"},
+            {"prose_model": ""}):
+    try:
+        ECFG.from_dict(bad, source="file")
+        check(f"config refuses {bad}", False, "accepted")
+    except ValueError:
+        check(f"config refuses {bad}", True)
+# a local override is fine
+ok_cfg = ECFG.from_dict({"prose_model": "ollama/qwen3.6:latest"},
+                        source="file")
+check("config accepts local model",
+      ok_cfg.prose_model == "ollama/qwen3.6:latest")
+
+# catalogue parsing: both shapes, degraded fields, id-sorted
+raw = {"data": [
+    {"id": "openrouter/auto"},
+    {"id": "ollama/qwen3.8:latest", "context_length": 32000},
+    {"id": "ollama/muse-glimmer:latest"},
+    {"id": "", "context_length": 1},          # dropped (no id)
+    "ollama/qwen3.6:latest",                    # bare string form
+]}
+cat = MODELS.parse_catalog(raw)
+check("catalog parsed + id-sorted",
+      [m["id"] for m in cat] == ["ollama/muse-glimmer:latest",
+                                  "ollama/qwen3.6:latest",
+                                  "ollama/qwen3.8:latest",
+                                  "openrouter/auto"], cat)
+check("bare-list shape works",
+      len(MODELS.parse_catalog(["ollama/a", "ollama/b"])) == 2)
+check("garbage degrades to []", MODELS.parse_catalog(None) == []
+      and MODELS.parse_catalog({"nope": 1}) == [])
+by = {m["id"]: m for m in cat}
+check("context parsed", by["ollama/qwen3.8:latest"]["context_length"] == 32000)
+check("local flag set", by["ollama/qwen3.8:latest"]["local"] is True
+      and by["openrouter/auto"]["local"] is False)
+
+# describe_choice: levels
+rem = MODELS.describe_choice("openrouter/auto", "prose", cat)
+check("remote describe = error + not ok",
+      rem["level"] == "error" and rem["ok"] is False, rem)
+low = MODELS.describe_choice("ollama/small", "prose",
+                             [{"id": "ollama/small", "context_length": 4096,
+                               "local": True}])
+check("tiny context = error for prose", low["level"] == "error", low)
+unk = MODELS.describe_choice("ollama/x", "prose",
+                             [{"id": "ollama/x", "context_length": None,
+                               "local": True}])
+check("unknown context = warn for prose", unk["level"] == "warn", unk)
+inh = MODELS.describe_choice("", "privacy", cat)
+check("empty privacy describe = ok inherit", inh["ok"] and inh["level"] == "ok", inh)
+smry = MODELS.catalog_summary(cat, "ollama/qwen3.8:latest", "")
+check("catalog_summary carries both role descriptions",
+      "prose_model" in smry and "privacy_model" in smry and len(smry["models"]) == 4)
+
+print("== 8. retention gate (F5) with a fake graph ==")
 
 
 class FakeGraph:
