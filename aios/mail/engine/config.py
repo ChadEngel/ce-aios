@@ -243,8 +243,36 @@ CONFIG_FILE = "config.yaml"
 JOURNAL_FILE = "config-journal.jsonl"
 
 
-def config_path(state_dir):
-    return os.path.join(state_dir, CONFIG_FILE)
+def default_dir():
+    """The DIRECTORY the config store lives in — deliberately SEPARATE from
+    the ledger's directory (step 5).
+
+    Why a subdirectory and not just /state: from step 5 the console gets its
+    first WRITE path (editing rules in the UI). The console's safety story has
+    always been "a bug here cannot corrupt the ledger", enforced by mounting
+    /state READ-ONLY. To keep that true while allowing config writes, the
+    config store moves into <state>/config and the console mounts THAT
+    subdirectory read-write while the ledger's parent stays read-only — so a
+    console bug can name /config/... but is structurally unable to open
+    /state/ledger.jsonl for writing (proved live: root mount RO denies the
+    ledger, the subPath mount allows only the subdir).
+
+    Overridable with DIGEST_CONFIG_DIR (the container sets it to the mount
+    path it chose, which may differ per workload — e.g. the console mounts the
+    same subdir at /config while the legs reach it at /state/config)."""
+    env = os.environ.get("DIGEST_CONFIG_DIR")
+    if env:
+        return env
+    return os.path.join(os.environ.get("DIGEST_STATE_DIR", "/state"),
+                        "config")
+
+
+def config_path(state_dir=None):
+    return os.path.join(state_dir or default_dir(), CONFIG_FILE)
+
+
+def journal_path(state_dir=None):
+    return os.path.join(state_dir or default_dir(), JOURNAL_FILE)
 
 
 def load(state_dir=None, log=None):
@@ -254,9 +282,20 @@ def load(state_dir=None, log=None):
     but it must be visible that the file was ignored."""
     print_fn = log or (lambda *a: print("[config]", *a, file=os.sys.stderr,
                                         flush=True))
-    state_dir = state_dir or os.environ.get("DIGEST_STATE_DIR", "/state")
+    state_dir = state_dir or default_dir()
     cfg = from_env()
     path = config_path(state_dir)
+    # Legacy-path guard (step 5): the store moved from <state>/config.yaml into
+    # the <state>/config/ subdirectory. If an OLD file is found where the new
+    # one should be absent, that is a silent file->env behaviour flip — so say
+    # so loudly rather than ignore it. Not auto-migrated: that would be a write,
+    # and a surprising one; the operator moves it deliberately.
+    if not os.path.exists(path) and os.path.basename(state_dir) == "config":
+        legacy = os.path.join(os.path.dirname(state_dir), CONFIG_FILE)
+        if os.path.exists(legacy):
+            print_fn(f"WARNING: legacy config at {legacy} is IGNORED — the "
+                     f"store now lives at {path}; move the file to keep its "
+                     f"overrides (otherwise env defaults apply)")
     if os.path.exists(path):
         try:
             import yaml
@@ -283,7 +322,7 @@ def save(cfg: Config, actor: str, state_dir=None):
     """Write the complete config.yaml atomically + append the journal row
     (D5). Validation happens in from_dict/validate BEFORE any write. The
     journal entry is fsync'd before save() returns."""
-    state_dir = state_dir or os.environ.get("DIGEST_STATE_DIR", "/state")
+    state_dir = state_dir or default_dir()
     os.makedirs(state_dir, exist_ok=True)
     cfg.validate()
     # Round-trip through dict->Config so what lands on disk is EXACTLY the
@@ -302,6 +341,13 @@ def save(cfg: Config, actor: str, state_dir=None):
             yaml.safe_dump(snap, fh, sort_keys=True, allow_unicode=True)
             fh.flush()
             os.fsync(fh.fileno())
+        # mkstemp creates 0600 owned by the writer. The legs that CONSUME this
+        # file may run as a different uid than the console that wrote it (both
+        # nobody today, but the console is a separate deployment), so make it
+        # world-readable: a config the reader cannot open is the silent
+        # file->env flip this store exists to prevent. It holds no secrets
+        # (rules/models/folders), so 0644 is correct here.
+        os.chmod(tmp, 0o644)
         os.replace(tmp, config_path(state_dir))
         tmp = None
     finally:
@@ -309,7 +355,7 @@ def save(cfg: Config, actor: str, state_dir=None):
             os.unlink(tmp)
     entry = {"t": "config", "ts": _utcnow(), "actor": actor, "version": ver,
              "config": snap}
-    with open(os.path.join(state_dir, JOURNAL_FILE), "a",
+    with open(journal_path(state_dir), "a",
               encoding="utf-8") as fh:
         fh.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
         fh.flush()
@@ -317,9 +363,50 @@ def save(cfg: Config, actor: str, state_dir=None):
     return ver
 
 
+def apply_overrides(current, overrides):
+    """Return a validated new Config = current with `overrides` merged on top.
+
+    THE safe-save rule (the one bug this store has repeatedly invited):
+    from_dict(partial_dict) resets every ABSENT key to its DEFAULT. So a save
+    must always start from the current EFFECTIVE config (which already merged
+    env + file) and override only the named keys — never from_dict(overrides)
+    alone, which would silently drop every env-raised knob to its default.
+
+    Raises ValueError on an unknown key or a value validate() refuses — the
+    same refusal the save path relies on, surfaced BEFORE anything is written.
+    """
+    if not isinstance(overrides, dict):
+        raise ValueError("overrides must be an object")
+    merged = asdict(current)
+    merged.pop("source", None)
+    bad = set(overrides) - set(merged)
+    if bad:
+        raise ValueError(f"unknown config key(s): {sorted(bad)}")
+    merged.update(overrides)
+    return from_dict(merged, source="file")
+
+
+def diff(old: Config, new: Config):
+    """Field-level change list between two configs: [{key, from, to}], only
+    for keys whose effective value differs. Used by the console to show what a
+    Save would change (D5: every edit renders a diff before it lands).
+
+    Boolean/tuple values are returned as-is; the caller formats for display.
+    """
+    a, b = asdict(old), asdict(new)
+    a.pop("source", None)
+    b.pop("source", None)
+    out = []
+    for k in sorted(set(a) | set(b)):
+        va, vb = a.get(k), b.get(k)
+        if va != vb:
+            out.append({"key": k, "from": va, "to": vb})
+    return out
+
+
 def history(state_dir=None):
-    state_dir = state_dir or os.environ.get("DIGEST_STATE_DIR", "/state")
-    path = os.path.join(state_dir, JOURNAL_FILE)
+    state_dir = state_dir or default_dir()
+    path = journal_path(state_dir)
     out = []
     if not os.path.exists(path):
         return out

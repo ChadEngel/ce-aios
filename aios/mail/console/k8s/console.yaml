@@ -1,7 +1,11 @@
-# AIOS Inbox Console — READ-ONLY (0.6.2).
+# AIOS Inbox Console — read-only ledger + the config write path (0.6.3).
 # One box = one mailbox (D4): this service mounts the SAME /state PVC as the
-# digest/filer legs, but READ-ONLY — a bug here cannot corrupt the ledger,
-# and no endpoint in the image writes to disk at all.
+# digest/filer legs but with TWO mounts:
+#   /state  READ-ONLY  — the ledger. A bug here can never corrupt it.
+#   /config READ-WRITE — the config store SUBDIRECTORY only (step 5: the
+#                        console's sole write path; config.yaml + journal).
+# The mount boundary is the safety argument: the ledger is not merely
+# "not written" by this app, it is unwritable to it.
 # Auth: HTTP Basic over LAN; password lives in secret aios-console-auth
 # (create it once: kubectl -n ai create secret generic aios-console-auth
 #  --from-literal=password='...').
@@ -65,7 +69,7 @@ spec:
         kubernetes.io/os: linux
       containers:
         - name: console
-          image: caehomelab/aios-mail-console:0.6.2
+          image: caehomelab/aios-mail-console:0.6.4
           imagePullPolicy: Never
           ports:
             - containerPort: 8080
@@ -86,13 +90,41 @@ spec:
               # k3s API endpoint (svc/kubernetes :443 refuses from pods on
               # workers; the server node answers directly)
               value: https://192.168.30.217:6443
+            # STEP 5 — the config store lives in a SUBDIRECTORY mounted
+            # read-write here. The ledger's /state mount stays READ-ONLY, so a
+            # console bug can write config but is structurally unable to open
+            # ledger.jsonl for writing (proven: root RO denies it, this subPath
+            # allows only the subdir).
+            - name: DIGEST_CONFIG_DIR
+              value: /config
+            # Actor recorded in the D5 journal for console saves.
+            - name: CONSOLE_ACTOR
+              value: console:chad
           resources:
             requests: {memory: 96Mi, cpu: 50m}
             limits: {memory: 256Mi, cpu: 500m}
+          securityContext:
+            # Non-root, matching the digest/filer legs. Load-bearing for step 5:
+            # the config files this writes must be mutually readable by the
+            # legs that consume them (same uid + save() writes 0644).
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
           volumeMounts:
             - name: state
               mountPath: /state
-              readOnly: true   # load-bearing: no write path, ever
+              readOnly: true   # load-bearing: the LEDGER is never writable here
+            # The config store subdir, mounted SEPARATELY read-write. The ONLY
+            # writable path in this pod: config.yaml + its journal live here,
+            # isolated from the ledger by the mount boundary itself.
+            - name: state
+              mountPath: /config
+              subPath: config
+              readOnly: false
       volumes:
         - name: state
           persistentVolumeClaim:

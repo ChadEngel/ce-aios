@@ -1,4 +1,4 @@
-# AIOS Inbox Console — read-only dashboard + dry-run preview (0.6.2)
+# AIOS Inbox Console — dashboard + config editing (0.6.4)
 
 The web front end of `aios/mail/`. One box, one mailbox (D4). This app has
 **no mutation endpoints** — it can never move, delete, or send mail, and the
@@ -32,22 +32,41 @@ What it computes (`POST /api/dryrun`, no persistence anywhere):
   The contacts tier ("you emailed this person") is excluded from previews —
   it needs live sent-folder data the ledger does not carry.
 
-Boundaries (decisions.md D3/D7): zero mutation endpoints; mail content shown
-is limited to the ledger's own subject/sender/preview snippets; no GitHub,
-LLM, or mail-API calls from this app. Editing UI ships later — deliberately
-not in the same image.
+Boundaries (decisions.md D3/D7): the console **never touches mail** — no move,
+file, delete, send, no Graph/LLM/GitHub. Its **only** mutation is the config
+store, and even that is structurally isolated: the ledger's `/state` mount
+stays **read-only**, while the config store subdir (`config/`) is mounted
+separately **read-write**. A console bug can edit rules but cannot open
+`ledger.jsonl` for writing, whatever path it builds. Mail content shown is
+limited to the ledger's own subject/sender/preview snippets.
+
+Editing shipped as build-order **step 5** — after the read-only console proved
+true over a live window.
+
+## Editing (step 5)
+- **`POST /api/config/diff`** — preview a config edit: field-level old→new diff
+  + resulting version. Pure compute (writes nothing), same as `/api/dryrun`.
+- **`POST /api/config/save`** — the write path. Requires `confirm:true`;
+  validates (unknown keys, negative retention, remote models, bad schedules →
+  400), journals the actor (D5), then writes the **complete** snapshot. A no-op
+  edit writes nothing.
+- **`/api/dryrun`** — shows the effect an edit would have on real mail (grouped
+  from→to with samples), writing nothing.
+- The UI renders the config diff and requires an explicit **Save**; the actor
+  (`CONSOLE_ACTOR`, e.g. `console:chad`) is recorded per edit.
 
 ## Files
 - `console.py` — FastAPI app (auth, `/api/state`, `/api/dryrun`)
 - `static/index.html` — single-page dark UI
-- `selftest_console.py` — offline tests (41) incl. byte-identical state-dir
-  proof, schedule-view/dry-run-refusal, and the R2 models view
+- `selftest_console.py` — offline tests (65) incl. byte-identical state-dir
+  proof, the R1/R2 views, and the step-5 write path (diff/save/journal,
+  destructive-edit refusal, and proof the ledger is untouched by saves)
 - `k8s/` — SA + read-only Role + Deployment + NodePort Service + netpol
 
 ## Build & deploy
 ```bash
 docker buildx build --platform linux/amd64 --load \
-  -t caehomelab/aios-mail-console:0.6.2 \
+  -t caehomelab/aios-mail-console:0.6.4 \
   --file aios/mail/console/Dockerfile aios/mail/
 
 kubectl -n ai create secret generic aios-console-auth \

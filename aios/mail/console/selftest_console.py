@@ -14,8 +14,14 @@ import tempfile
 import time
 
 TMP = tempfile.mkdtemp(prefix="aios-console-test-")
-os.environ["DIGEST_STATE_DIR"] = TMP
+os.environ["DIGEST_STATE_DIR"] = TMP            # the LEDGER (read-only to the
+# console live; here a plain dir). The config store is a SUBDIRECTORY, exactly
+# as in the deployment, mounted read-write while /state is read-only.
+CFG = os.path.join(TMP, "config")
+os.environ["DIGEST_CONFIG_DIR"] = CFG
+os.makedirs(CFG, exist_ok=True)
 os.environ["CONSOLE_PASSWORD"] = ""   # routes are auth-gated; direct calls
+os.environ["CONSOLE_ACTOR"] = "console:test"
 os.environ.setdefault("DIGEST_PRIORITY_KEYWORDS", "bluff creek")
 
 PARENT = os.path.dirname(os.path.abspath(__file__))
@@ -101,7 +107,7 @@ print("== 2. provenance: file override wins on its keys only ==")
 merged = ECFG.asdict(ECFG.from_env())
 merged.pop("source", None)
 merged["filed_days"] = 21
-ECFG.save(ECFG.from_dict(merged, source="file"), actor="test", state_dir=TMP)
+ECFG.save(ECFG.from_dict(merged, source="file"), actor="test", state_dir=CFG)
 s2 = C._state_payload()
 kc = {k["key"]: k for k in s2["config"]["keys"]}
 check("filed_days origin=file", kc["filed_days"]["origin"] == "file")
@@ -241,6 +247,86 @@ check("state byte-identical after model refusals", _tree_hash() == before4)
 r_m = C.api_dryrun(Req(overrides={"prose_model": "ollama/qwen3.6:latest"}))
 check("valid local model override accepted in preview",
       "changed" in r_m and _tree_hash() == before4)
+
+print("== 10. STEP 5: the config write path = diff, save, journal =")
+# A save needs a confirm; without it, refuse and write nothing.
+def _cfg_hash():
+    h = hashlib.sha256()
+    for f in sorted(os.listdir(CFG)):
+        with open(os.path.join(CFG, f), "rb") as fh:
+            h.update(fh.read())
+    return h.hexdigest()
+
+before5 = _cfg_hash()
+try:
+    C.api_config_save(C.ConfigWrite(overrides={"filed_days": 30}, confirm=False))
+    check("save without confirm refused", False, "accepted")
+except Exception as exc:
+    check("save without confirm refused(400)",
+          getattr(exc, "status_code", 0) == 400, str(exc)[:80])
+check("unconfirmed save wrote nothing", _cfg_hash() == before5)
+
+# diff endpoint: pure compute, reports the change, writes nothing
+before_diff = _cfg_hash()
+d = C.api_config_diff(C.ConfigWrite(overrides={"filed_days": 30}))
+check("diff lists the changed key",
+      any(c["key"] == "filed_days" and str(c["to"]) == "30"
+          for c in d["changes"]), d)
+check("diff reports current->proposed versions",
+      d["current_version"] != d["proposed_version"], d)
+check("diff writes nothing", _cfg_hash() == before_diff)
+
+# save: validates -> journals actor -> writes complete snapshot
+res = C.api_config_save(C.ConfigWrite(overrides={"filed_days": 30},
+                                      confirm=True))
+check("save succeeded", res["saved"] is True, res)
+check("save reports the actor", res["actor"] == "console:test", res)
+check("save wrote config.yaml", os.path.exists(ECFG.config_path(CFG)))
+reloaded = ECFG.load(CFG, log=lambda *a: None)
+check("value persisted", reloaded.filed_days == 30, reloaded.filed_days)
+check("other keys preserved (full-snapshot save)",
+      reloaded.scan_top == ECFG.load(None, log=lambda *a: None).scan_top
+      if False else reloaded.scan_top == ECFG.from_env().scan_top,
+      reloaded.scan_top)
+check("journal recorded console actor",
+      any(e.get("actor") == "console:test" for e in ECFG.history(CFG)))
+
+# a no-op save writes nothing
+before_noop = _cfg_hash()
+res2 = C.api_config_save(C.ConfigWrite(overrides={"filed_days": 30},
+                                       confirm=True))
+check("no-op save reports saved=False", res2["saved"] is False, res2)
+check("no-op save wrote nothing", _cfg_hash() == before_noop)
+
+print("== 11. STEP 5: destructive edits refused before any write ==")
+for bad in ({"filed_days": -1}, {"no_such_key": 1},
+            {"prose_model": "openrouter/auto"},
+            {"digest_schedule": "*/5 * * * *"}):
+    before_bad = _cfg_hash()
+    try:
+        C.api_config_save(C.ConfigWrite(overrides=bad, confirm=True))
+        check(f"refused {bad}", False, "accepted")
+    except Exception as exc:
+        check(f"refused {bad}(400)",
+              getattr(exc, "status_code", 0) == 400, str(exc)[:80])
+    check(f"no write for {bad}", _cfg_hash() == before_bad)
+
+print("== 12. STEP 5: the ledger is UNWRITABLE to the console's write path ==")
+# The console writes ONLY inside CONFIG_DIR. Prove the code holds no write
+# path to the ledger: state.py's append() targets STATE_DIR (the RO mount in
+# prod), and the config write functions only ever touch CONFIG_DIR.
+ledger = os.path.join(TMP, "ledger.jsonl")
+ledger_before = open(ledger, "rb").read() if os.path.exists(ledger) else b""
+C.api_config_save(C.ConfigWrite(overrides={"filed_days": 31}, confirm=True))
+check("config saves never touch the ledger file",
+      (open(ledger, "rb").read() if os.path.exists(ledger) else b"") == ledger_before)
+# structural check: no config-write code references a ledger path
+import inspect  # noqa: E402
+src = inspect.getsource(ECFG.save) + inspect.getsource(ECFG.apply_overrides)
+check("config.save never names ledger.jsonl",
+      "ledger" not in src.lower(), src[:80])
+check("state.LEDGER is outside the config store dir",
+      os.path.dirname(ST.LEDGER) != CFG, (ST.LEDGER, CFG))
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

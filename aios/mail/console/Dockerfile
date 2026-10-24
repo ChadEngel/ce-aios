@@ -20,6 +20,11 @@ COPY digest/model_catalog.py /app/model_catalog.py
 RUN chmod 0444 /app/console.py /app/state.py /app/model_catalog.py && \
     chmod -R a+rX /app/engine /app/static
 
+# Non-root (65534, same as the digest/filer legs). Load-bearing for step 5: the
+# console writes the config store, and files it creates must be readable by the
+# legs that consume them — same uid, plus save() chmods the file 0644.
+USER 65534:65534
+
 ENV DIGEST_STATE_DIR=/state
 EXPOSE 8080
 WORKDIR /app
