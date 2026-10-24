@@ -40,3 +40,59 @@ spec:
       ports:
         - protocol: TCP
           port: 443
+---
+# FILER egress policy (R1). The filer had no policy before (it was unpoliced);
+# this ADDS one that mirrors the digest's egress and then allows the k3s API
+# server on 6443 for the schedule reconciler (it keeps the digest CronJob in
+# sync with the config store). Same flat 443-anywhere posture as the digest:
+# Bifrost is RFC1918 and Microsoft publishes no stable Graph CIDR. Egress-only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aios-mail-filer-netpol
+  namespace: ai
+  labels:
+    app.kubernetes.io/name: aios-mail-filer
+    app.kubernetes.io/part-of: aios
+spec:
+  podSelector:
+    matchLabels:
+      app: aios-mail-filer
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+    # k3s API server for the schedule reconciler's GET/PATCH on the one
+    # CronJob the RBAC Role names.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 6443
+    # R1: the filer heartbeat reconciles the digest CronJob schedule, which
+    # needs the k3s API server on 6443 (192.168.30.217, RFC1918). Scoped to
+    # that port only; the RBAC Role restricts it to get/patch on one CronJob.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 6443

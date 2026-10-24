@@ -1,0 +1,48 @@
+# R1 schedule reconciler RBAC — the narrowest grant that does the job.
+#
+# The filer heartbeat keeps the DIGEST CronJob's schedule in sync with the
+# config store (digest_schedule/digest_tz). That needs exactly two verbs on
+# ONE named object: get (to compare) and patch (to update). resourceNames
+# pins it to `aios-mail-digest` so even a code bug cannot point the reconciler
+# at another cronjob/object — the API server refuses everything else.
+#
+# No create/delete, no other resources, no cluster scope. If this Role is
+# missing or wrong the reconciler logs a 403 and the digest simply keeps its
+# current schedule (fail-safe), so the grant can be tightened freely.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aios-mail-filer
+  namespace: ai
+  labels:
+    app: aios-mail-filer
+    app.kubernetes.io/part-of: aios
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: aios-mail-filer-schedule
+  namespace: ai
+  labels:
+    app.kubernetes.io/part-of: aios
+rules:
+  - apiGroups: [batch]
+    resources: [cronjobs]
+    resourceNames: [aios-mail-digest]   # exactly one object, ever
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aios-mail-filer-schedule
+  namespace: ai
+  labels:
+    app.kubernetes.io/part-of: aios
+subjects:
+  - kind: ServiceAccount
+    name: aios-mail-filer
+    namespace: ai
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: aios-mail-filer-schedule

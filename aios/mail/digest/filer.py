@@ -46,6 +46,7 @@ if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)  # make `import engine` work (0.5.0)
 
 import state as ST           # noqa: E402
+import schedule_reconciler as SCHED_REC  # noqa: E402 (R1: cadence sync)
 
 # Load the digest module for the shared, already-audited logic (classify,
 # privacy keep-pass, MCP clients, folder map). One source of truth for
@@ -179,7 +180,17 @@ def main():
     # --- 0. Config store (0.5.0): rules from YAML if present, env below. The
     # digest module's rule globals are updated in place so BOTH legs always
     # agree with each other and with whatever config version loaded.
-    D.apply_config()
+    cfg = D.apply_config()
+    # --- 0b. Cadence reconciler (R1): the filer is the heartbeat; keep the
+    # DIGEST CronJob's schedule in sync with the config store. Best-effort —
+    # a failure here can only leave the digest on its previous schedule, and
+    # must NEVER affect filing/retention below (those are this process's job,
+    # and mail keeps flowing). Runs BEFORE paging so a slow/down API server
+    # cannot delay filing (short 8s timeouts inside reconcile).
+    try:
+        SCHED_REC.reconcile(cfg, log=log)
+    except Exception as exc:
+        log(f"schedule reconcile FAILED (continuing): {str(exc)[:120]}")
     # Crash repair first; never stack a new run on an unresolved gap.
     try:
         reconcile()

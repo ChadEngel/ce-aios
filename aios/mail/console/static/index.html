@@ -58,6 +58,17 @@
   </section>
 
   <section>
+    <h2>Digest cadence <span class="chip">R1 · user-scheduled</span></h2>
+    <div id="cadence" class="mini">loading…</div>
+    <p class="mini" style="margin-top:8px">The cadence lives in the config
+    store (<code>digest_schedule</code> / <code>digest_tz</code>). The filer
+    heartbeat reconciles the digest CronJob to match — it retries every 5 min
+    and a failure leaves the previous schedule in force, so a bad edit can
+    pause the digest but can never affect filing or retention. Validation
+    (croniter + a 1-fire/hour floor) refuses bad schedules at save time.</p>
+  </section>
+
+  <section>
     <h2>Effective rules <span id="confsrc" class="chip"></span></h2>
     <table id="rules"><thead>
       <tr><th>Key</th><th>Value</th><th>Origin</th></tr>
@@ -150,6 +161,15 @@ async function load() {
      <td><span class="origin ${k2.origin}">${k2.origin}</span></td></tr>`).join('');
   document.getElementById('confsrc').textContent =
     s.config.file_keys.length ? (s.config.file_keys.length + ' key(s) overridden by file') : '';
+
+  const cad = s.config.schedule || {};
+  document.getElementById('cadence').innerHTML = cad.valid === false
+    ? `<span class="err">invalid: ${esc(cad.error||'')}</span>`
+    : `<code>${esc(cad.schedule)}</code> · timezone <b>${esc(cad.tz)}</b>`
+      + '<div style="margin-top:6px">next fires: '
+      + (cad.next||[]).map(x=>`<code style="margin-right:6px">${esc(ts(x))}</code>`).join('')
+      + '</div>'
+      + (cad.advisories||[]).map(a=>`<div class="mini" style="color:var(--warn,#e0b050)">⚠ ${esc(a)}</div>`).join('');
 
   document.getElementById('journal').innerHTML = !s.config.journal.length
     ? 'no changes yet — env-manifest in force (loading config.yaml for the first time records a save here)'

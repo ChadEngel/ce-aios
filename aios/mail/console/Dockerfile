@@ -7,7 +7,7 @@
 FROM python:3.12-slim
 
 RUN pip install --no-cache-dir "fastapi==0.115.6" "uvicorn==0.32.0" \
-    "pyyaml==6.0.3"
+    "pyyaml==6.0.3" "croniter==6.0.0" tzdata
 
 COPY console/console.py /app/console.py
 COPY console/static/ /app/static/

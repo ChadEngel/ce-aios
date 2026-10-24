@@ -167,7 +167,67 @@ check("excluded contact falls through to junk", m12["_file"] == "filed",
 check("emailed friend stays priority", m13["type"] == "priority"
       and m13["_file"] is None, m13)
 
-print("== 6. retention gate (F5) with a fake graph ==")
+print("== 6. schedule validation + next-fire maths (R1) ==")
+from engine import schedule as SCHED  # noqa: E402
+
+# default pair from env/config must be valid (behaviour-neutral introduction)
+check("default schedule valid",
+      SCHED.validate_schedule(cfg.digest_schedule, cfg.digest_tz) is True)
+check("3x/day default -> next fire exists",
+      len(SCHED.next_fires("0 5,12,17 * * *", "America/Chicago", 3)) == 3)
+
+# invalid cron expression refused
+for bad in ("", "not a cron", "0 5,12,17 * *", "99 * * * *"):
+    try:
+        SCHED.validate_schedule(bad, "America/Chicago")
+        check(f"refuse cron {bad!r}", False, "accepted")
+    except ValueError:
+        check(f"refuse cron {bad!r}", True)
+
+# unknown timezone refused
+try:
+    SCHED.validate_schedule("0 5 * * *", "Mars/Olympus_Mons")
+    check("refuse bad tz", False, "accepted")
+except ValueError:
+    check("refuse bad tz", True)
+
+# 1-fire/hour floor: an hourly hammer is refused (mis-typed expression guard)
+try:
+    SCHED.validate_schedule("*/5 * * * *", "America/Chicago")
+    check("refuse >1/hour schedule", False, "accepted */5")
+except ValueError:
+    check("refuse >1/hour schedule", True)
+# exactly 1/hour is ALLOWED (the floor is a floor, not a ban on hourly)
+check("hourly is allowed (gap == 3600s)",
+      SCHED.validate_schedule("0 * * * *", "America/Chicago") is True)
+
+# config.validate() must refuse a bad schedule end-to-end (save-time gate)
+for bad in ({"digest_schedule": "nope"}, {"digest_tz": "Nowhere/Land"},
+            {"digest_schedule": "*/5 * * * *"}):
+    try:
+        ECFG.from_dict(bad, source="file")
+        check(f"config refuses {bad}", False, "accepted")
+    except ValueError:
+        check(f"config refuses {bad}", True)
+
+# DST: a 5am local fire stays 5am local across the fall-back shift. Anchor
+# before/after the 2026-11-01 US fall-back; the local hour must be 5 both times.
+from datetime import datetime, timezone  # noqa: E402
+dst_fires = SCHED._next_anchored("0 5 * * *", "America/Chicago", 300,
+                                 now=datetime(2026, 10, 25, 12, tzinfo=timezone.utc))
+local_hours = {d.hour for d in dst_fires}
+check("DST: 5am stays 5am across fall-back", local_hours == {5}, sorted(local_hours))
+
+# describe() never raises and reports validity + advisories
+d = SCHED.describe("0 5,12,17 * * *", "America/Chicago")
+check("describe valid", d["valid"] and len(d["next"]) == 5, d)
+d2 = SCHED.describe("garbage", "America/Chicago")
+check("describe invalid is graceful", d2["valid"] is False and d2["next"] == [], d2)
+d3 = SCHED.describe("0 5 * * *", "America/Chicago")  # minute 0 == filer heartbeat
+check("filer minute advisory is advisory-only (still valid)",
+      d3["valid"] and d3["advisories"], d3)
+
+print("== 7. retention gate (F5) with a fake graph ==")
 
 
 class FakeGraph:

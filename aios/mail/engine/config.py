@@ -83,11 +83,15 @@ class Config:
     prose_model: str = "ollama/muse-glimmer:latest"
     privacy_model: str = ""
 
-    # NOTE — intentionally NOT in the schema yet: digest_schedule/digest_tz.
-    # They ship together with the scheduler reconciler that consumes them
-    # (roadmap inbox-console: UI requirement intake 2026-10-21). A config key
-    # with no consumer is a silent no-op — exactly the explainability failure
-    # this store exists to prevent. Never add inert keys.
+    # Digest cadence (R1, user-scheduled — never hard-coded). These ship WITH
+    # the reconciler that consumes them (digest/schedule_reconciler.py, run on
+    # the filer heartbeat): a config key with no consumer would be a silent
+    # no-op, so the pair landed together or not at all. Defaults mirror the
+    # historic manifest constant so the env-only deployment is unchanged.
+    # validate() parses the cron expression + timezone AND enforces the
+    # 1-fire/hour floor via engine.schedule.
+    digest_schedule: str = "0 5,12,17 * * *"
+    digest_tz: str = "America/Chicago"
 
     # Runtime metadata (not user-editable, not part of the YAML schema)
     source: str = field(default="env", repr=False)  # "env" | "file"
@@ -117,6 +121,17 @@ class Config:
         for pk in ("receipt_patterns", "order_patterns", "privacy_subjects"):
             for pat in getattr(self, pk):
                 re.compile(pat)  # raises ValueError on garbage
+        # Schedule (R1): parse cron + timezone + the 1-fire/hour floor. A
+        # schedule that cannot fire, or fires 60x/hour, is refused HERE — so
+        # it can never be saved and can never reach the CronJob reconciler.
+        # ScheduleUnavailable (croniter missing) is NOT an invalid schedule:
+        # the digest/console do not consume the cadence, so a missing test
+        # dependency must never stop mail from being filed.
+        from engine import schedule as _sch
+        try:
+            _sch.validate_schedule(self.digest_schedule, self.digest_tz)
+        except _sch.ScheduleUnavailable:
+            pass
 
 
 def asdict(cfg: Config) -> dict:
@@ -209,6 +224,8 @@ def from_env() -> Config:
             "deletion|opt|request),"
             "data (removal|deletion|suppression|privacy),"
             "privacy (request|confirm\\w*)"),
+        digest_schedule=os.environ.get("DIGEST_SCHEDULE", "0 5,12,17 * * *"),
+        digest_tz=os.environ.get("DIGEST_TZ", "America/Chicago"),
         source="env",
     )
     cfg.validate()
