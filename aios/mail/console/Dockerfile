@@ -14,7 +14,11 @@ COPY console/static/ /app/static/
 # Shared modules — the SAME files the fires run (one source of truth):
 COPY engine/ /app/engine/
 COPY digest/state.py /app/state.py
-RUN chmod 0444 /app/console.py /app/state.py && chmod -R a+rX /app/engine /app/static
+# model_catalog is read-only here (the console renders the cache the legs
+# fetch; it holds no gateway key and makes no LLM calls).
+COPY digest/model_catalog.py /app/model_catalog.py
+RUN chmod 0444 /app/console.py /app/state.py /app/model_catalog.py && \
+    chmod -R a+rX /app/engine /app/static
 
 ENV DIGEST_STATE_DIR=/state
 EXPOSE 8080

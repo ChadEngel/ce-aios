@@ -1,4 +1,4 @@
-# AIOS Inbox Console — read-only dashboard + dry-run preview (0.6.1)
+# AIOS Inbox Console — read-only dashboard + dry-run preview (0.6.2)
 
 The web front end of `aios/mail/`. One box, one mailbox (D4). This app has
 **no mutation endpoints** — it can never move, delete, or send mail, and the
@@ -12,7 +12,6 @@ What it shows (`GET /api/state`):
 - **Effective rules with provenance**: every key's value and where its value
   comes from — `file` (config.yaml on /state actually CHANGES the env value),
   `env` (k8s manifest), `default` (engine default).
-- **Model in use**: `prose_model` + `privacy_model`.
 - **Config journal (D5)**: last config saves (actor/timestamp/version).
 - **Fire status**: filer/digest CronJob schedules, last fire, ok/failed
   (in-cluster read-only serviceaccount; Role = get/list batch only).
@@ -20,6 +19,10 @@ What it shows (`GET /api/state`):
   the next 5 fire times, so the dashboard reflects what the filer-heartbeat
   reconciler enforces. Read-only — the console only reports it; validation
   (croniter + 1-fire/hour floor) runs when the config store is loaded.
+- **Models (R2)**: the cached model catalogue with per-model suitability for
+  both legs (`prose` needs >=8k context; both must be LOCAL — a remote id is
+  refused at save). The catalogue is fetched by the filer (which holds the
+  gateway key) and read here read-only; this console makes no LLM calls.
 
 What it computes (`POST /api/dryrun`, no persistence anywhere):
 - **Dry-run preview**: a hypothetical config (validated, unknown keys and
@@ -37,14 +40,14 @@ not in the same image.
 ## Files
 - `console.py` — FastAPI app (auth, `/api/state`, `/api/dryrun`)
 - `static/index.html` — single-page dark UI
-- `selftest_console.py` — offline tests (28) incl. byte-identical state-dir
-  proof and schedule-view/dry-run-refusal coverage
+- `selftest_console.py` — offline tests (41) incl. byte-identical state-dir
+  proof, schedule-view/dry-run-refusal, and the R2 models view
 - `k8s/` — SA + read-only Role + Deployment + NodePort Service + netpol
 
 ## Build & deploy
 ```bash
 docker buildx build --platform linux/amd64 --load \
-  -t caehomelab/aios-mail-console:0.6.1 \
+  -t caehomelab/aios-mail-console:0.6.2 \
   --file aios/mail/console/Dockerfile aios/mail/
 
 kubectl -n ai create secret generic aios-console-auth \

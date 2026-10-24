@@ -159,6 +159,43 @@ idempotent, patches once on drift, and every error path leaves the CronJob
 alone (stub API server). Engine selftest adds the schedule-validation block
 (invalid cron/tz, >1/hour refused, hourly allowed, DST pinned).
 
+## Model catalogue + local-only picker (R2, 0.6.1, 2026-10-24)
+
+Two model touchpoints already existed (`prose_model`, `privacy_model` in the
+config store since 0.5.1); R2 makes the CHOICE safe and visible.
+
+**The invariant this enforces:** mail content must never leave the cluster.
+The privacy keep-pass sends sender/subject text to the model, so a remote model
+is an exfiltration path — R2 states flatly that BOTH legs are local-only.
+Locality is enforced **structurally** (a provider prefix, `ollama/` by default),
+not by hoping a user picks well: `engine/models.py` `validate_choice()` is called
+from `Config.validate()`, so a remote id is **refused at save time** exactly
+like a negative retention day. An empty `privacy_model` still means "inherit
+prose_model"; an empty `prose_model` is refused.
+
+**Suitability, not just a list:** `describe_choice()` classifies a model for a
+role — `error` for remote, or for prose with context < 8000 tokens (a big inbox
+would truncate instead of being summarised); `warn` when the context is unknown
+or the id is not in the current catalogue; `ok` otherwise. The console shows the
+same verdicts the save path enforces, so the UI cannot offer a choice the engine
+would reject.
+
+**Who fetches what (boundary preserved):** the console's rule is "holds no
+Bifrost VK, never calls the LLM gateway". So the **filer** (which already holds
+the VK) fetches `/v1/models` on its heartbeat and caches it to
+`/state/model-catalog.json`; the console reads that cache read-only. A fetch
+failure or empty response leaves the previous cache (a stale catalogue beats
+none and never blocks a fire); the cache is skipped entirely when < 24h old, so
+the 5-minute heartbeat does not hammer the gateway. Ops can extend the local
+prefix set via `DIGEST_LOCAL_MODEL_PREFIXES` — deliberately env/infra, not a
+config-store key: a user must not be able to widen where their mail may be sent.
+
+Self-test: `selftest_models.py` (14 checks) — cache round-trip, atomic write,
+degraded/garbage tolerance, freshness skip (no network on a fresh cache), and
+fetch-failure/empty-response keeping the prior cache. Engine selftest adds the
+locality + catalogue-parsing block; console selftest adds the models view and
+remote-model refusal.
+
 ## Privacy in-flight tier (0.3.3, 2026-10-18)
 
 While Chad is actively clearing personal data from broker sites, opt-out /

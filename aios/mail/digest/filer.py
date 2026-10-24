@@ -47,6 +47,7 @@ if _PARENT not in sys.path:
 
 import state as ST           # noqa: E402
 import schedule_reconciler as SCHED_REC  # noqa: E402 (R1: cadence sync)
+import model_catalog as MODCAT           # noqa: E402 (R2: model catalog)
 
 # Load the digest module for the shared, already-audited logic (classify,
 # privacy keep-pass, MCP clients, folder map). One source of truth for
@@ -191,6 +192,14 @@ def main():
         SCHED_REC.reconcile(cfg, log=log)
     except Exception as exc:
         log(f"schedule reconcile FAILED (continuing): {str(exc)[:120]}")
+    # --- 0c. Model catalogue (R2): the filer holds the VK, so IT fetches the
+    # gateway's /v1/models and caches it on /state for the console to read.
+    # Best-effort + 24h freshness skip: the catalogue rarely changes and a
+    # failed fetch must never affect filing.
+    try:
+        MODCAT.refresh(log=log)
+    except Exception as exc:
+        log(f"model catalog refresh FAILED (continuing): {str(exc)[:120]}")
     # Crash repair first; never stack a new run on an unresolved gap.
     try:
         reconcile()

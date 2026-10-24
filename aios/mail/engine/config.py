@@ -132,6 +132,13 @@ class Config:
             _sch.validate_schedule(self.digest_schedule, self.digest_tz)
         except _sch.ScheduleUnavailable:
             pass
+        # Models (R2): a REMOTE model id is refused for BOTH legs — mail
+        # content must never leave the cluster, and the privacy keep-pass
+        # sends sender/subject text to the model. Locality is structural (a
+        # provider prefix), not a UI hint, so it holds however the id was set.
+        from engine import models as _models
+        _models.validate_choice(self.prose_model, "prose")
+        _models.validate_choice(self.privacy_model, "privacy")
 
 
 def asdict(cfg: Config) -> dict:

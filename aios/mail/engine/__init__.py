@@ -13,6 +13,7 @@ Modules:
   filing.py    folder-map/ensure/move/delete primitives over the port
   retention.py bounded soft-delete clear with the F5 ledger-confirmation gate
   schedule.py  cron/timezone validation + next-fire maths for the digest cadence
+  models.py    model catalogue parsing + locality/suitability (R2)
 
 Invariants carried over from 0.4.0, unchanged:
   - Filing is recoverable; missing mail is not. Mutations are logged before
