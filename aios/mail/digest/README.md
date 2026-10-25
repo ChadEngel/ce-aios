@@ -214,6 +214,39 @@ The legs still reach the store at `/state/config`; the console uses
 `DIGEST_CONFIG_DIR` (=`/config`, its own mount). Tests unchanged in behaviour
 — they pass the subdir explicitly.
 
+## One-time / verification-code tier (0.6.4, 2026-10-24)
+
+Login codes, 2FA codes, magic links and password resets **must stay in the
+inbox**: filing one away can mean a login the user cannot complete, and codes
+expire in minutes so there is no "recover it from AIOS-Filed later" story.
+Chad signs in to many services, each sending codes from a different sender and
+with different wording — so this cannot be a static domain list.
+
+**Two layers, same asymmetry rule as the privacy tier (the model can only
+EVER keep — a false keep is inbox clutter, a false file is a broken login):**
+1. **Deterministic** (`DIGEST_CODE_DOMAINS` / `DIGEST_CODE_SUBJECTS`, default
+   subjects cover "verification code", "one-time …", "OTP/2FA", "magic link",
+   "password reset", "verify your email", etc.). Runs FIRST among the fileable
+   checks, so a code email is never Receipts/Orders/junk — even a
+   "Receipt — your security code" stays put.
+2. **Model reasoning** (`code_llm_keeps`, layer 2) for the services and wording
+   no list anticipates. LOCAL-ONLY (`privacy_model`, validated local by R2) with
+   MCP tools denied per request — mail text never leaves the cluster. On model
+   failure the candidates are **held** from filing and re-checked next fire.
+
+**SECURITY — content is withheld from the report.** The digest posts to a
+GitHub issue, and a code is often *in the subject line*. So code mail is
+excluded from the prose AND from the privacy section; only a **content-free
+count** reaches the comment (`N one-time code / sign-in email(s) kept in the
+inbox (content withheld)`). The ids are still marked reported (dedupe stays
+correct). Both the filer (5-min leg — the one that would file a code away
+first) and the digest run the same tier.
+
+Self-test: engine adds the layer-1 fixtures (realistic subjects across
+services, plus "code wins over receipts" and the off-switch); digest adds the
+content-withholding property (codes never in the prose, count present, no
+subject leak).
+
 ## Privacy in-flight tier (0.3.3, 2026-10-18)
 
 While Chad is actively clearing personal data from broker sites, opt-out /

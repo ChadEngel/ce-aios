@@ -111,6 +111,8 @@ def _dest_label(c, cfg):
         return "kept in inbox (digest notice)"
     if c.get("type") == "priority":
         return "stays in inbox (priority)"
+    if c.get("_code"):
+        return "kept in inbox (one-time code)"
     if c.get("_privacy"):
         return "kept in inbox (privacy)"
     f = c.get("_file")
@@ -325,7 +327,7 @@ def _state_payload():
                               "sender": (r.get("sender_name")
                                          or r.get("sender_addr") or "")[:60],
                               "reason": r.get("reason") or
-                              (r.get("privacy") or "—"),
+                              (r.get("code") or r.get("privacy") or "—"),
                               "reported": bool(r.get("reported"))}
                              for r in keeps[:10]],
             "recent_filed": [{"ts": r.get("ts"),

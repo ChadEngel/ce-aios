@@ -74,6 +74,33 @@ class Config:
     privacy_domains: tuple = ()
     privacy_subjects: tuple = ()
 
+    # One-time / verification code tier (2026-10-24, Chad). Login codes, 2FA
+    # codes, magic links and password resets MUST STAY IN THE INBOX: filing one
+    # away can mean a login the user cannot complete, and codes expire in
+    # minutes so a "recover it from AIOS-Filed later" story does not exist.
+    # Same asymmetry rule as the privacy tier — the model may only EVER keep
+    # (a false keep is a little inbox clutter; a false file is a broken login).
+    # Layer 1 = deterministic domains/subject patterns (below); layer 2 = a
+    # local-only LLM keep-pass that reasons over sender+subject for the senders
+    # and wording no static list anticipates.
+    code_on: bool = True
+    code_llm_on: bool = True
+    code_domains: tuple = ()
+    code_subjects: tuple = (
+        "verification code",
+        "one[- ]?time (code|passcode|password|passcode|pin|link)",
+        "(security|confirmation|authentication|access|sign[- ]?in|login) "
+        "code",
+        "\\b(otp|totp|2fa|mfa)\\b",
+        "magic link",
+        "password reset",
+        "reset your password",
+        "temporary password",
+        "(verify|confirm) your (email|e-mail|account|identity|address|phone)",
+        "your (verification|security|confirmation|authentication|one[- ]?time) "
+        "(code|pin)",
+    )
+
     # LLM model ids (OpenAI-compatible id, e.g. "ollama/qwen3.8:latest") for
     # the two model touchpoints. prose_model composes the digest prose;
     # privacy_model runs the privacy keep-pass ("" = same as prose_model).
@@ -118,7 +145,8 @@ class Config:
         for k in ("filed_folder", "receipts_folder", "orders_folder"):
             if not str(getattr(self, k)).strip():
                 raise ValueError(f"{k} must be a non-empty folder name")
-        for pk in ("receipt_patterns", "order_patterns", "privacy_subjects"):
+        for pk in ("receipt_patterns", "order_patterns", "privacy_subjects",
+                   "code_subjects"):
             for pat in getattr(self, pk):
                 re.compile(pat)  # raises ValueError on garbage
         # Schedule (R1): parse cron + timezone + the 1-fire/hour floor. A
@@ -231,6 +259,23 @@ def from_env() -> Config:
             "deletion|opt|request),"
             "data (removal|deletion|suppression|privacy),"
             "privacy (request|confirm\\w*)"),
+        code_on=os.environ.get("DIGEST_CODE_KEEP", "1") != "0",
+        code_llm_on=os.environ.get("DIGEST_CODE_LLM", "1") != "0",
+        code_domains=_csv_list("DIGEST_CODE_DOMAINS", ""),
+        code_subjects=_csv_list(
+            "DIGEST_CODE_SUBJECTS",
+            "verification code,"
+            "one[- ]?time (code|passcode|password|pin|link),"
+            "(security|confirmation|authentication|access|sign[- ]?in|login) "
+            "code,"
+            "\\b(otp|totp|2fa|mfa)\\b,"
+            "magic link,"
+            "password reset,"
+            "reset your password,"
+            "temporary password,"
+            "(verify|confirm) your (email|e-mail|account|identity|address|phone),"
+            "your (verification|security|confirmation|authentication|one[- ]?time) "
+            "(code|pin)"),
         digest_schedule=os.environ.get("DIGEST_SCHEDULE", "0 5,12,17 * * *"),
         digest_tz=os.environ.get("DIGEST_TZ", "America/Chicago"),
         source="env",

@@ -1,7 +1,7 @@
 # AIOS R0 mail digest job — python-only image, no shell tools, non-root.
 # Build (context MUST be aios/mail/ so engine/ is copied in):
 #   docker buildx build --platform linux/amd64 --load \
-#     -t caehomelab/aios-mail-digest:0.6.3 --file aios/mail/digest/Dockerfile aios/mail/
+#     -t caehomelab/aios-mail-digest:0.6.4 --file aios/mail/digest/Dockerfile aios/mail/
 FROM python:3.12-slim
 
 RUN pip install --no-cache-dir "pyjwt[crypto]==2.9.0" "pyyaml==6.0.3" \

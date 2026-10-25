@@ -25,6 +25,7 @@ class Classifier:
         self.receipt_pats = [re.compile(s, re.I) for s in cfg.receipt_patterns]
         self.order_pats = [re.compile(s, re.I) for s in cfg.order_patterns]
         self.privacy_pats = [re.compile(s, re.I) for s in cfg.privacy_subjects]
+        self.code_pats = [re.compile(s, re.I) for s in cfg.code_subjects]
 
     def _is_notice(self, addr, subject):
         """True for the digest's own delivery mail (e.g. GitHub notification
@@ -44,7 +45,9 @@ class Classifier:
         """Deterministic bucketing; the model only writes prose.
         type:  "priority" (+reason) or "other" — feeds the prose prompt.
         _file: "receipts"/"orders" for typed matches, "filed" for junk, None
-               for priorities and _self_notice items."""
+               for priorities and _self_notice items.
+        _code: a reason string for one-time/verification-code mail — kept in
+               the inbox, never filed (see the code tier in config)."""
         cfg = self.cfg
         out = []
         for m in messages:
@@ -73,6 +76,7 @@ class Classifier:
                 elif dom:
                     reason = f"protected sender ({dom})"
             _privacy = None
+            _code = None
             _self_notice = None
             if self._is_notice(addr, subject):
                 _self_notice = "digest notification (kept in inbox, never filed)"
@@ -80,10 +84,24 @@ class Classifier:
             elif reason:
                 _file = None
             else:
+                # One-time/verification-code tier layer 1 (deterministic).
+                # FIRST among the fileable checks: a code email is NEVER
+                # Receipts/Orders/junk. Ordered before privacy too, so the
+                # ledger reason says "one-time code" (the more specific cause).
+                if cfg.code_on:
+                    cdom = next((d for d in cfg.code_domains
+                                 if addr.endswith("@" + d)
+                                 or addr.endswith("." + d)), None)
+                    csub = next((p.pattern for p in self.code_pats
+                                 if p.search(subject) or p.search(name)), None)
+                    if cdom:
+                        _code = f"code sender domain ({cdom})"
+                    elif csub:
+                        _code = f"code subject match ({csub[:40]})"
                 # Privacy layer 1 (deterministic). Runs BEFORE the typed
                 # folders: a broker confirmation must never land in
                 # Receipts/Orders either.
-                if cfg.privacy_on:
+                if not _code and cfg.privacy_on:
                     pdom = next((d for d in cfg.privacy_domains
                                  if addr.endswith("@" + d)
                                  or addr.endswith("." + d)), None)
@@ -93,18 +111,19 @@ class Classifier:
                         _privacy = f"broker sender domain ({pdom})"
                     elif psub:
                         _privacy = f"privacy subject match ({psub[:40]})"
-                _file = ("receipts" if not _privacy and any(
+                _file = ("receipts" if not _privacy and not _code and any(
                     p.search(subject) or p.search(name)
                     for p in self.receipt_pats) else None)
-                if not _privacy and not _file:
+                if not _privacy and not _code and not _file:
                     _file = ("orders" if any(
                         p.search(subject) or p.search(name)
                         for p in self.order_pats) else None)
-                if not reason and not _privacy and not _file:
+                if not reason and not _privacy and not _code and not _file:
                     _file = "filed"
             out.append({"type": "priority" if reason else "other",
                         "reason": reason, "_file": _file,
-                        "_privacy": _privacy, "_self_notice": _self_notice,
+                        "_privacy": _privacy, "_code": _code,
+                        "_self_notice": _self_notice,
                         "_id": msg_key(m.get("id")), "_fid": m.get("id"),
                         "_received": m.get("receivedDateTime"),
                         "_unread": m.get("isRead") is False,

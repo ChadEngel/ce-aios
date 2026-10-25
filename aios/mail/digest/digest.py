@@ -140,6 +140,11 @@ DIGEST_NOTICE_SUBJECTS = [s.strip().lower() for s in os.environ.get(
 # digest prose section while present in the inbox.
 PRIVACY_ON = os.environ.get("DIGEST_PRIVACY_KEEP", "1") != "0"
 PRIVACY_LLM_ON = os.environ.get("DIGEST_PRIVACY_LLM", "1") != "0"
+# One-time/verification-code tier (2026-10-24): layer 1 deterministic + layer 2
+# model reasoning, both KEEP-only. Values are overridden by the config store in
+# _apply(); these env defaults exist so an env-only deployment is unchanged.
+CODE_ON = os.environ.get("DIGEST_CODE_KEEP", "1") != "0"
+CODE_LLM_ON = os.environ.get("DIGEST_CODE_LLM", "1") != "0"
 PRIVACY_DOMAINS = [d.strip().lower() for d in os.environ.get(
     "DIGEST_PRIVACY_DOMAINS",
     "whitepages.com,spokeo.com,beenverified.com,radaris.com,intelius.com,"
@@ -255,6 +260,7 @@ def _apply(cfg):
     global PRIORITY_KEYWORDS, PROTECTED_DOMAINS, CONTACT_EXCLUDES
     global RECEIPT_PATTERNS, ORDER_PATTERNS
     global PRIVACY_ON, PRIVACY_LLM_ON, PRIVACY_DOMAINS, PRIVACY_SUBJECTS
+    global CODE_ON, CODE_LLM_ON
     global DIGEST_NOTICE_SENDERS, DIGEST_NOTICE_SUBJECTS
     global ORDERS_FOLDER, RECEIPTS_FOLDER, FILED_FOLDER
     _CFG = cfg
@@ -266,6 +272,7 @@ def _apply(cfg):
     RECEIPT_PATTERNS = [re.compile(s, re.I) for s in cfg.receipt_patterns]
     ORDER_PATTERNS = [re.compile(s, re.I) for s in cfg.order_patterns]
     PRIVACY_ON, PRIVACY_LLM_ON = cfg.privacy_on, cfg.privacy_llm_on
+    CODE_ON, CODE_LLM_ON = cfg.code_on, cfg.code_llm_on
     PRIVACY_DOMAINS = list(cfg.privacy_domains)
     PRIVACY_SUBJECTS = [re.compile(s, re.I) for s in cfg.privacy_subjects]
     DIGEST_NOTICE_SENDERS = list(cfg.notice_senders)
@@ -451,7 +458,7 @@ def classify(messages, sent_contacts):
 # ---------------------------------------------------------------- privacy tier
 
 def _chat_small(system, user, tokens=500):
-    """Small robust chat call for structured suggestions (the privacy model
+    """Small robust chat call for structured suggestions (the keep-pass model
     MODEL_PRIV + read VK; two attempts for the reasoning flake). The model
     SUGGESTS keeps only — asymmetry rule, it can never file/delete."""
     for attempt, tk in ((1, tokens), (2, tokens * 2)):
@@ -469,9 +476,32 @@ def _chat_small(system, user, tokens=500):
         content = (resp["choices"][0]["message"].get("content") or "").strip()
         if content:
             return content
-        log(f"privacy llm: attempt {attempt} empty (finish="
+        log(f"keep-pass llm: attempt {attempt} empty (finish="
             f"{resp['choices'][0].get('finish_reason')})")
-    raise RuntimeError("empty model content after retry (privacy suggestion)")
+    raise RuntimeError("empty model content after retry (keep suggestion)")
+
+
+def _keep_indexes(system, cands, tag):
+    """Shared keep-pass shape: send [{i,sender,subject}] to the model, parse
+    {"keep": [i,...]}, map real indexes back to message ids. Returns a set of
+    _id. ASYMMETRY RULE: the caller only ever turns a returned id into a KEEP;
+    the model can never cause a file or delete. Out-of-range/invented indexes
+    are ignored."""
+    def _sender(c):
+        ea = (c.get("from") or {}).get("emailAddress") or {}
+        return f"{ea.get('name') or ''} <{ea.get('address') or ''}>".strip(" <>")
+    items = [{"i": i, "sender": _sender(c), "subject": c["subject"]}
+             for i, c in enumerate(cands)]
+    txt = _chat_small(system, json.dumps(items, ensure_ascii=False))
+    txt = re.sub(r"^```[a-z]*\n|```$", "", txt.strip(), flags=re.M).strip()
+    data = json.loads(txt)
+    keep = data.get("keep", []) if isinstance(data, dict) else []
+    kept = set()
+    for i in keep:
+        if isinstance(i, int) and 0 <= i < len(cands):
+            kept.add(cands[i]["_id"])
+    log(f"{tag} llm: suggested keep {sorted(kept or [])}")
+    return kept
 
 
 def privacy_llm_keeps(cands):
@@ -481,11 +511,6 @@ def privacy_llm_keeps(cands):
     returned indexes to _file=None (keep in inbox). It can never file or
     delete. On LLM failure we fail safe: no ids returned AND the candidates
     are excluded from this fire's filing plan (held for re-check next fire)."""
-    def _sender(c):
-        ea = (c.get("from") or {}).get("emailAddress") or {}
-        return f"{ea.get('name') or ''} <{ea.get('address') or ''}>".strip(" <>")
-    items = [{"i": i, "sender": _sender(c), "subject": c["subject"]}
-             for i, c in enumerate(cands)]
     system = (
         "You triage a personal mailbox while the user is actively removing "
         "personal data from data-broker and people-search websites. Their "
@@ -499,16 +524,43 @@ def privacy_llm_keeps(cands):
         "confirmation (a failed removal). Output ONLY json: {\"keep\": [i, ...]} "
         "using real indexes from the list; empty list if none qualify; never "
         "invent indexes. You suggest a keep; you never act.".strip())
-    txt = _chat_small(system, json.dumps(items, ensure_ascii=False))
-    txt = re.sub(r"^```[a-z]*\n|```$", "", txt.strip(), flags=re.M).strip()
-    data = json.loads(txt)
-    keep = data.get("keep", []) if isinstance(data, dict) else []
-    kept = set()
-    for i in keep:
-        if isinstance(i, int) and 0 <= i < len(cands):
-            kept.add(cands[i]["_id"])
-    log(f"privacy llm: suggested keep {sorted(kept or [])}")
-    return kept
+    return _keep_indexes(system, cands, "privacy")
+
+
+def code_llm_keeps(cands):
+    """Layer 2 of the one-time/verification-code tier. The user signs in to
+    many services that each send codes from different senders and with
+    different wording, so a static list cannot cover them. The model reasons
+    over sender+subject to spot anything that is plausibly a login/2FA code,
+    magic link, password reset, or sign-in confirmation.
+
+    ASYMMETRY RULE (identical to the privacy pass): a returned id becomes a
+    KEEP only. A false positive is inbox clutter; a false negative is a login
+    the user cannot complete (codes expire in minutes — there is no
+    recover-it-from-a-folder story). On failure we fail safe: candidates are
+    held out of this fire's filing plan and re-checked next fire.
+
+    LOCAL-ONLY: MODEL_PRIV is validated local by config.validate() (R2), and
+    the MCP tools are denied per request — mail text never leaves the
+    cluster."""
+    system = (
+        "You protect a personal inbox. The user logs in to many different "
+        "services, each of which emails a one-time code. If such an email is "
+        "filed out of the inbox the user cannot complete a login in time, "
+        "because the codes expire within minutes. Given a JSON list of "
+        "messages (field i = index), identify every message that is, or might "
+        "plausibly be, a one-time passcode / verification code / security "
+        "code / 2FA or MFA code / login or sign-in code / magic link / "
+        "password reset or temporary password / account- or email-verification "
+        "link. Judge from the SENDER and SUBJECT only (the service name may "
+        "appear anywhere and is not on any fixed list). Be very INCLUSIVE: "
+        "include anything that could be a code or sign-in email — leaving junk "
+        "in the inbox is harmless, missing a code breaks a login. Do NOT "
+        "include marketing, newsletters, receipts, shipping notices, or "
+        "ordinary account statements. Output ONLY json: {\"keep\": [i, ...]} "
+        "using real indexes; empty list if none qualify; never invent "
+        "indexes. You suggest a keep; you never act.".strip())
+    return _keep_indexes(system, cands, "code")
 
 
 # ---------------------------------------------------------------- filing tier
@@ -914,6 +966,7 @@ def ledger_to_classified(entries):
                     "subject": r.get("subject") or "(no subject)",
                     "preview": r.get("preview") or "",
                     "_file": r.get("folder"), "_privacy": r.get("privacy"),
+                    "_code": r.get("code"),
                     "_self_notice": r.get("self_notice"),
                     "_id": r.get("id"), "_unread": bool(r.get("unread"))})
     return out
@@ -941,13 +994,18 @@ def select_fresh(classified, reported, filed_set):
     Privacy-kept mail is EXCLUDED here on purpose: it is reported once, in its
     own "Privacy (kept in inbox)" section (see privacy_new in main()), so it
     must not ALSO appear as a Priority/other bullet.
+
+    One-time-code mail is EXCLUDED for a STRONGER reason: the code is often in
+    the subject line ("123456 is your code"), and this text is posted to a
+    GitHub issue — so its content must never reach the prose. Codes are
+    surfaced as a CONTENT-FREE count instead (see code_new in main()).
     """
     fresh, emitted = [], set()
     for c in classified:
         mid = c["_id"]
         if not mid or mid in reported or mid in emitted:
             continue
-        if c.get("_privacy"):
+        if c.get("_privacy") or c.get("_code"):
             continue
         if ((c["type"] == "priority" and not c.get("_self_notice"))
                 or (c["_file"] == "filed" and mid not in filed_set)):
@@ -966,7 +1024,8 @@ def _sender_name(entry):
             or ea.get("address") or entry.get("sender_addr") or "unknown")
 
 
-def comment_body(digest_text, filed_counts, cleared_count, reported_ids):
+def comment_body(digest_text, filed_counts, cleared_count, reported_ids,
+                 code_count=0):
     """Assemble the comment. TRACKER-FIRST layout: the hidden dedupe line goes
     immediately after the header, and only the model prose is eligible for
     truncation, so neither the dedupe ledger nor the deterministic Filed block
@@ -990,6 +1049,13 @@ def comment_body(digest_text, filed_counts, cleared_count, reported_ids):
     if cleared_count:
         lines.append(f"- {FILED_FOLDER}: {cleared_count} expired (> {FILED_DAYS}d) "
                      "→ Deleted Items")
+    if code_count:
+        # CONTENT-FREE on purpose: the message bodies/subjects of one-time-code
+        # mail are withheld from this (GitHub-posted) comment — the subject
+        # often literally contains the live code. The count is all that is
+        # shown; the mail itself stays in the inbox.
+        lines.append(f"- {code_count} one-time code / sign-in email(s) kept "
+                     "in the inbox (content withheld)")
     filed_block = "\n".join(lines) if lines else "- none"
     header = f"## ✉️ AIOS mail digest — {local_stamp()}\n\n"
     footer = ("<sub>Generated locally ("
@@ -1012,8 +1078,9 @@ def comment_body(digest_text, filed_counts, cleared_count, reported_ids):
 
 
 def github_comment(digest_text, filed_counts, cleared_count, reported_ids,
-                   install_token):
-    body = comment_body(digest_text, filed_counts, cleared_count, reported_ids)
+                   install_token, code_count=0):
+    body = comment_body(digest_text, filed_counts, cleared_count, reported_ids,
+                        code_count=code_count)
     c = http_json(
         "POST", f"https://api.github.com/repos/{GITHUB_APP_REPO}/issues/"
                 f"{DIGEST_ISSUE_NUMBER}/comments",
@@ -1087,7 +1154,8 @@ def main():
     privacy = [c for c in classified if c.get("_privacy")]
     if PRIVACY_ON and PRIVACY_LLM_ON:
         cands = [c for c in classified
-                 if c.get("_file") and not c.get("_privacy")]
+                 if c.get("_file") and not c.get("_privacy")
+                 and not c.get("_code")]
         if cands:
             try:
                 kept = privacy_llm_keeps(cands)
@@ -1104,10 +1172,38 @@ def main():
     if privacy:
         log(f"privacy: {len(privacy)} message(s) protected in inbox")
 
+    # One-time/verification-code tier (2026-10-24). Layer 1 is stamped by
+    # classify(); layer 2 = model-suggested keeps over the remaining
+    # would-be-filed set. Same asymmetry rule as privacy: a returned id is
+    # only ever turned into a KEEP. Rationale for the model here: the user
+    # signs in to many services, each sending codes from different senders
+    # with different wording — no static domain/subject list covers them, so
+    # reasoning is needed. Failure = fail safe (hold + retry next fire).
+    code = [c for c in classified if c.get("_code")]
+    if CODE_ON and CODE_LLM_ON:
+        cands = [c for c in classified
+                 if c.get("_file") and not c.get("_privacy")
+                 and not c.get("_code") and not c.get("_held")]
+        if cands:
+            try:
+                kept = code_llm_keeps(cands)
+                for c in cands:
+                    if c["_id"] in kept:
+                        c["_code"] = "model-suggested one-time/login code (kept)"
+                        c["_file"] = None
+                code = [c for c in classified if c.get("_code")]
+            except Exception as exc:
+                log(f"code llm: FAILED ({str(exc)[:100]}) — holding "
+                    f"{len(cands)} candidate(s) from filing this fire")
+                for c in cands:
+                    c["_held"] = True
+    if code:
+        log(f"code tier: {len(code)} message(s) protected in inbox")
+
     # Filing plan (deterministic, computed BEFORE any posting):
     #   typed (receipts/orders) — always file, read or unread
     #   junk ("filed")          — file once previously reported (grace >= 1 fire)
-    # Privacy-kept items never enter any plan (classification already set
+    # Privacy/code-kept items never enter any plan (classification already set
     # _file=None for them); _held candidates are also held out this fire.
     plan = [(c, c["_file"]) for c in classified
             if c["_file"] in ("receipts", "orders") and not c.get("_held")]
@@ -1136,16 +1232,20 @@ def main():
     fresh = select_fresh(classified, reported, filed_set)
     # Privacy items get their own section — show only the ones that are new.
     privacy_new = [c for c in privacy if c["_id"] not in reported]
+    # One-time-code items are NEVER shown (content could be the live code and
+    # this posts to a GitHub issue) — only a content-free count is surfaced.
+    code_new = [c for c in code if c["_id"] not in reported]
     kept_notices = sum(1 for c in classified if c.get("_self_notice"))
     log(f"tracking: {len(seen)} today / {len(prior)} tracker / "
         f"{len(reported)} dedupe; prose fresh: {len(fresh)}; "
         f"privacy new: {len(privacy_new)} of {len(privacy)}; "
-        f"digest notices kept: {kept_notices}")
+        f"code new: {len(code_new)} of {len(code)} (count only, content "
+        f"withheld); digest notices kept: {kept_notices}")
 
     # `ledger_filed` is excluded here too: a window where the filer filed mail
     # is never an "all clear", even if the inbox now lists zero unread.
     if (not unread_count and not fresh and not plan and cleared == 0
-            and not privacy_new and not ledger_filed):
+            and not privacy_new and not code_new and not ledger_filed):
         if not seen:
             log("morning all-clear")
             token = github_install_token()
@@ -1162,7 +1262,7 @@ def main():
     # digest quiet on genuinely idle windows while never silently dropping the
     # filer leg's work.
     if (not fresh and not plan and cleared == 0 and not privacy_new
-            and not ledger_filed):
+            and not code_new and not ledger_filed):
         log("nothing new since last fire — skipping post")
         # Advance the cursor even on a skip. Without this the cursor stays
         # pinned behind rows that can NEVER be reported (the digest's own
@@ -1195,9 +1295,11 @@ def main():
     # filer-filed row the prose did not mention would resurface every fire.
     reported_now = ([c["_id"] for c in fresh]
                     + [c["_id"] for c in privacy_new]
+                    + [c["_id"] for c in code_new]
                     + [r.get("id") for r in ledger_entries])
     reported_now = sorted({m for m in reported_now if m})
-    github_comment(summary, counts, cleared, reported_now, token)
+    github_comment(summary, counts, cleared, reported_now, token,
+                   code_count=len(code_new))
     # Durable dedupe LAST: flag every id this fire reported in the ledger, and
     # advance the filer-row cursor to the newest ledger entry we summarised, so
     # a crash anywhere above causes a re-report rather than a silent skip.

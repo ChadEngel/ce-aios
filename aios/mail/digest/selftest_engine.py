@@ -172,6 +172,66 @@ check("excluded contact falls through to junk", m12["_file"] == "filed",
 check("emailed friend stays priority", m13["type"] == "priority"
       and m13["_file"] is None, m13)
 
+print("== 5b. one-time/verification-code tier (layer 1) ==")
+# codes must be KEPT and must beat receipts/orders/junk. Realistic subjects
+# across different services (no fixed sender list).
+code_cases = [
+    (msg("c1", "no-reply@somebank.example",
+         "Your verification code is 448192"), "code subject", True),
+    (msg("c2", "security@randomshop.example",
+         "123456 is your one-time passcode"), "code subject", True),
+    (msg("c3", "login@unknown-service.example",
+         "Your sign-in code"), "code subject", True),
+    (msg("c4", "accounts@somesite.example",
+         "Reset your password"), "code subject", True),
+    (msg("c5", "auth@newapp.example",
+         "Your magic link to sign in"), "code subject", True),
+    (msg("c6", "verify@somewhere.example",
+         "Please verify your email address"), "code subject", True),
+    (msg("c7", "team@thing.example",
+         "Your temporary password"), "code subject", True),
+    # a receipt-looking code mail must still be kept (code wins over receipts)
+    (msg("c8", "billing@store.example",
+         "Receipt — your security code 90210"), "code subject", True),
+    # not codes: marketing/receipts/shipping stay on their normal path
+    (msg("c9", "deals@store.example", "50% off this week"), "junk", False),
+    (msg("c10", "billing@store.example", "Receipt from The Store"),
+     "receipts", False),
+]
+code_cfg = ECFG.from_dict({
+    "code_subjects": [
+        r"verification code", r"one[- ]?time (code|passcode|password|pin|link)",
+        r"(security|confirmation|authentication|access|sign[- ]?in|login) code",
+        r"\b(otp|totp|2fa|mfa)\b", r"magic link", r"password reset",
+        r"reset your password", r"temporary password",
+        r"(verify|confirm) your (email|e-mail|account|identity|address|phone)",
+        r"your (verification|security|confirmation|authentication|one[- ]?time) (code|pin)"],
+    "receipt_patterns": ["^receipt", "^invoice"],
+}, source="file")
+cl_code = Classifier(code_cfg)
+cout = {c["_id"]: c for c in cl_code.classify([c[0] for c in code_cases], ())}
+for fixture, marker, expect_code in code_cases:
+    c = cout[msg_key(fixture["id"])]
+    if expect_code:
+        check(f"{fixture['id']} kept as one-time code",
+              bool(c["_code"]) and c["_file"] is None, c)
+    elif marker == "receipts":
+        check(f"{fixture['id']} still receipts (not code)",
+              c["_file"] == "receipts" and not c["_code"], (c["_file"],
+                                                            c["_code"]))
+    else:
+        check(f"{fixture['id']} still junk (not code)",
+              c["_file"] == "filed" and not c["_code"], (c["_file"],
+                                                          c["_code"]))
+# the code tier can be turned off wholesale
+code_off = ECFG.from_dict({"code_on": False, "receipt_patterns": ["^receipt"]},
+                          source="file")
+coff = {c["_id"]: c for c in Classifier(code_off).classify(
+    [msg("c1", "no-reply@somebank.example", "Your verification code is 448192")], ())}
+check("code_on=False disables the tier",
+      coff[msg_key("c1")]["_code"] is None and
+      coff[msg_key("c1")]["_file"] == "filed", coff[msg_key("c1")])
+
 print("== 6. schedule validation + next-fire maths (R1) ==")
 from engine import schedule as SCHED  # noqa: E402
 
