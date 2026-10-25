@@ -1,4 +1,4 @@
-# AIOS Inbox Console — dashboard + config editing (0.6.4)
+# AIOS Inbox Console — dashboard + config editing (0.6.6)
 
 The web front end of `aios/mail/`. One box, one mailbox (D4). This app has
 **no mutation endpoints** — it can never move, delete, or send mail, and the
@@ -72,7 +72,7 @@ true over a live window.
 ## Build & deploy
 ```bash
 docker buildx build --platform linux/amd64 --load \
-  -t caehomelab/aios-mail-console:0.6.5 \
+  -t caehomelab/aios-mail-console:0.6.6 \
   --file aios/mail/console/Dockerfile aios/mail/
 
 kubectl -n ai create secret generic aios-console-auth \

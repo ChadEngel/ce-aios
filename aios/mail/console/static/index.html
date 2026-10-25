@@ -137,7 +137,14 @@
 </div>
 
 <script>
-const esc = s => (s+'').replace(/[&<>"']/g,c=>({'"':'&quot;',"'":'&#39;'}))[c]||c;
+// HTML-escape every interpolated value. NOTE the callback's parens: the `[c]`
+// lookup MUST sit inside the arrow body, not after it. The 0.6.0-0.6.5 form
+// `.../g,c=>({...}))[c]||c` put `[c]` OUTSIDE the callback, referencing an
+// undefined `c` — so esc() threw on its FIRST call and the whole dashboard
+// silently stopped after the cards (Fires/Cadence/Models stuck on "loading…").
+// Also escapes & < > (the old map handled only the quotes).
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const ts = s => s ? s.replace('T',' ').slice(0,16) : '—';
 
 async function load() {
