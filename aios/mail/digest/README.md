@@ -196,6 +196,24 @@ fetch-failure/empty-response keeping the prior cache. Engine selftest adds the
 locality + catalogue-parsing block; console selftest adds the models view and
 remote-model refusal.
 
+## Config store location (step 5, 0.6.2)
+
+The config store moved from `<state>/config.yaml` into **`<state>/config/`** —
+a subdirectory. Reason: step 5 gives the console its first write path (editing
+rules), and the console's safety story is "a bug cannot corrupt the ledger",
+enforced by mounting `/state` **read-only**. To keep that true while allowing
+config writes, the console mounts the `config/` subdirectory **separately,
+read-write**, while `/state` stays read-only — so a console bug is structurally
+unable to open `ledger.jsonl` for writing (proved live on this NFS volume: the
+root RO mount denies the ledger, the subPath mount allows only the subdir).
+
+No migration needed: `config.yaml` did not exist in the live deployment
+(source=env), so this is behaviour-neutral. If a legacy file IS found at the
+old path, `load()` logs a LOUD warning rather than silently flipping file→env.
+The legs still reach the store at `/state/config`; the console uses
+`DIGEST_CONFIG_DIR` (=`/config`, its own mount). Tests unchanged in behaviour
+— they pass the subdir explicitly.
+
 ## Privacy in-flight tier (0.3.3, 2026-10-18)
 
 While Chad is actively clearing personal data from broker sites, opt-out /

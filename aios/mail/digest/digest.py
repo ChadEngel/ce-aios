@@ -193,6 +193,12 @@ from engine import retention as _eng_retention      # noqa: E402,F401
 from engine.classify import msg_key  # noqa: E402,F401  (single definition)
 
 CFG_DIR = os.environ.get("DIGEST_STATE_DIR", "/state")
+# Config store lives in a SUBDIRECTORY (step 5): <state>/config. The legs
+# mount the whole /state RW (they write the ledger anyway); the config dir is
+# just where the store is. DIGEST_CONFIG_DIR overrides the whole path (the
+# console mounts that subdir on its own, read-write, while /state stays RO).
+CFG_STORE_DIR = os.environ.get("DIGEST_CONFIG_DIR") \
+    or os.path.join(CFG_DIR, "config")
 
 
 class McpGraph:
@@ -276,7 +282,7 @@ def _apply(cfg):
 
 
 def apply_config():
-    cfg = engine.config.load(CFG_DIR, log=log)
+    cfg = engine.config.load(CFG_STORE_DIR, log=log)
     _apply(cfg)
     return cfg
 

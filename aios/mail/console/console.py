@@ -1,22 +1,26 @@
-"""AIOS Inbox Console — READ-ONLY dashboard + dry-run preview (0.6.0).
+"""AIOS Inbox Console — dashboard + dry-run + config editing (0.6.3).
 
-Roadmap inbox-console: build-order step 3 (dry-run preview) and step 4
-(read-only UI) of 5. Editing ships later (step 5), ONLY once this console is
-proven true; there is deliberately no write path in this app yet.
+Roadmap inbox-console: build-order step 3 (dry-run preview) → step 4 (read-only
+UI) → step 5 (editing, THIS version). Editing exists only after the read-only
+console proved true over a live window.
 
-The console shares the SAME state PVC as the digest/filer legs — mounted
-READ-ONLY (k8s readOnly:true, so a bug here cannot corrupt the ledger) — and
-speaks the ledger through state.py and classification through
-engine.classify: the same code the fires run, one source of truth (that IS
-the M1 gate "console reflects what the live digest actually did").
+The console shares the SAME state PVC as the digest/filer legs — but with TWO
+mounts, and the split IS the safety argument:
+  /state   READ-ONLY  — the ledger. state.py is used for reads only, and the
+                        mount makes ledger.jsonl UNWRITABLE to this app.
+  /config  READ-WRITE — the config store SUBDIRECTORY (config.yaml + journal),
+                        the console's one and only write path.
+A console bug can therefore edit config but cannot corrupt the ledger, no
+matter what path it constructs.
 
-HARD RULES (decisions.md D3/D7 boundaries, enforced in this file):
-  - The console has ZERO mutation endpoints. No move/delete/file of mail,
-    ever; no Mail.Send; no writes to /state (read-only mount, and nothing
-    in this code opens /state for writing).
-  - POST /api/dryrun is pure compute: a HYPOTHETICAL config is validated and
-    classified against recent ledger items in memory; nothing is saved.
-  - The console never talks to GitHub, never calls the LLM gateway.
+HARD RULES (decisions.md D3/D7 boundaries):
+  - The console NEVER touches mail: no move/delete/file/send, no Graph, no
+    LLM, no GitHub. Its only mutation is the config store.
+  - POST /api/dryrun and POST /api/config/diff are pure compute: nothing is
+    persisted.
+  - POST /api/config/save validates -> journals the actor (D5) -> writes the
+    COMPLETE snapshot. It refuses destructive values (remote models, negative
+    retention, invalid schedules, unknown keys) before anything is written.
   - Mail content shown is limited to what the ledger already carries:
     subject/sender/preview snippets — never bodies, never credentials.
 """
@@ -49,6 +53,16 @@ from engine import models as MODELS         # noqa: E402
 from engine.classify import Classifier      # noqa: E402
 
 STATE_DIR = os.environ.get("DIGEST_STATE_DIR", "/state")
+# Step 5: the config store is a SUBDIRECTORY, mounted separately from the
+# read-only ledger. The console mounts it read-write here (DIGEST_CONFIG_DIR);
+# /state itself stays READ-ONLY, so a console bug cannot open ledger.jsonl for
+# writing no matter what path it constructs. Writes are further confined to the
+# config store by the code below (config.save / set_schedule only).
+CONFIG_DIR = os.environ.get("DIGEST_CONFIG_DIR") or ECFG.default_dir()
+# Actor recorded in the D5 journal for console-originated saves. The k8s
+# deployment sets CONSOLE_ACTOR (e.g. "console:<UPN>"); a bare name is the
+# LAN default.
+CONSOLE_ACTOR = os.environ.get("CONSOLE_ACTOR", "console")
 PASSWORD = os.environ.get("CONSOLE_PASSWORD", "")
 K8S_NS = os.environ.get("CONSOLE_K8S_NS", "ai")
 STATIC_DIR = os.path.join(APP_DIR, "static")
@@ -135,11 +149,11 @@ def _display(v):
 
 
 def _config_view():
-    current = ECFG.load(STATE_DIR, log=lambda *a: None)
+    current = ECFG.load(CONFIG_DIR, log=lambda *a: None)
     env_cfg = ECFG.from_env()
     dflt = ECFG.Config()
     file_values = {}
-    path = ECFG.config_path(STATE_DIR)
+    path = ECFG.config_path(CONFIG_DIR)
     if os.path.exists(path):
         try:
             import yaml
@@ -174,7 +188,7 @@ def _config_view():
         keys.append({"key": k, "value": _display(v), "origin": origin})
     journal = [{"ts": e.get("ts"), "actor": e.get("actor"),
                 "version": e.get("version")}
-               for e in ECFG.history(STATE_DIR)[-JOURNAL_CAP:]][::-1]
+               for e in ECFG.history(CONFIG_DIR)[-JOURNAL_CAP:]][::-1]
     return {"version": current.version, "source": current.source,
             "prose_model": current.prose_model,
             "privacy_model": current.privacy_model, "keys": keys,
@@ -378,7 +392,7 @@ def api_dryrun(req: DryRunRequest):
     try:
         if not isinstance(req.overrides, dict) or not req.overrides:
             raise ValueError("overrides must be a non-empty JSON object")
-        current = ECFG.load(STATE_DIR, log=lambda *a: None)
+        current = ECFG.load(CONFIG_DIR, log=lambda *a: None)
         merged_cfg = ECFG.asdict(current)
         merged_cfg.pop("source", None)
         merged_cfg.update(req.overrides)
@@ -432,6 +446,106 @@ def api_dryrun(req: DryRunRequest):
             "changed": sum(g["count"] for g in changes),
             "changes": changes,
             "note": "PREVIEW ONLY — nothing was saved, nothing was moved"}
+
+
+# --------------------------------------------------------------------------
+# STEP 5 — the config write path (the console's FIRST and ONLY mutation).
+#
+# Scope, stated plainly because it is the whole safety argument:
+#   - These endpoints write the CONFIG STORE ONLY (config.yaml + its journal),
+#     which lives in a subdirectory mounted read-write (DIGEST_CONFIG_DIR).
+#     The ledger's directory (/state) stays mounted READ-ONLY, so no bug here
+#     can open ledger.jsonl for writing no matter what path it builds.
+#   - They NEVER touch mail: no move/delete/send, no Graph, no LLM, no GitHub.
+#   - Every save is VALIDATED first (engine.config.apply_overrides ->
+#     validate()), then journaled with the actor (D5). An invalid or
+#     destructive config is refused with 400 and writes nothing.
+# --------------------------------------------------------------------------
+def _config_write_available():
+    """Guard: refuse to pretend to save when the config dir is not actually
+    writable (e.g. a deployment that forgot the RW mount). Better a clear 503
+    than a save that silently does nothing or 500s on the ledger's RO mount."""
+    d = CONFIG_DIR
+    try:
+        if not os.path.isdir(d):
+            os.makedirs(d, exist_ok=True)
+        probe = os.path.join(d, ".write-probe")
+        with open(probe, "w") as fh:
+            fh.write("ok")
+        os.unlink(probe)
+        return True
+    except Exception:
+        return False
+
+
+class ConfigWrite(BaseModel):
+    overrides: dict
+    confirm: bool = False      # save requires an explicit confirm from the UI
+
+
+def _propose(current, overrides):
+    """current + overrides -> validated proposed Config. Raises ValueError
+    (-> 400) on an unknown key or a value validate() refuses."""
+    return ECFG.apply_overrides(current, overrides)
+
+
+def _printable(v):
+    if isinstance(v, (list, tuple)):
+        return ", ".join(str(x) for x in v)
+    return v
+
+
+@app.post("/api/config/diff")
+def api_config_diff(req: ConfigWrite):
+    """Preview a config edit: the field-level diff (old -> new) and the
+    resulting version. Writes NOTHING (same guarantee as /api/dryrun)."""
+    require_auth(_current_request())
+    try:
+        current = ECFG.load(CONFIG_DIR, log=lambda *a: None)
+        proposed = _propose(current, req.overrides)
+    except ValueError as exc:
+        raise HTTPException(400, f"invalid config: {str(exc)[:200]}")
+    changes = [{"key": c["key"], "from": _printable(c["from"]),
+                "to": _printable(c["to"])}
+               for c in ECFG.diff(current, proposed)]
+    return {"current_version": current.version,
+            "proposed_version": proposed.version,
+            "changes": changes,
+            "note": "PREVIEW ONLY — nothing was saved"}
+
+
+@app.post("/api/config/save")
+def api_config_save(req: ConfigWrite):
+    """THE write path. Validates, then persists the COMPLETE config snapshot
+    + a D5 journal row with the actor. Writes only inside CONFIG_DIR.
+
+    Requires confirm=true so a stray POST cannot mutate config by accident;
+    the UI renders the diff first.
+    """
+    require_auth(_current_request())
+    if not req.confirm:
+        raise HTTPException(400, "confirm must be true to save")
+    if not _config_write_available():
+        raise HTTPException(503, f"config store not writable ({CONFIG_DIR}); "
+                                 f"check the read-write mount")
+    try:
+        current = ECFG.load(CONFIG_DIR, log=lambda *a: None)
+        proposed = _propose(current, req.overrides)
+    except ValueError as exc:
+        raise HTTPException(400, f"invalid config: {str(exc)[:200]}")
+    changes = ECFG.diff(current, proposed)
+    if not changes:
+        return {"saved": False, "version": current.version,
+                "changes": [], "note": "no change — nothing written"}
+    try:
+        ver = ECFG.save(proposed, actor=CONSOLE_ACTOR, state_dir=CONFIG_DIR)
+    except Exception as exc:
+        raise HTTPException(500, f"save failed: {str(exc)[:200]}")
+    return {"saved": True, "version": ver, "actor": CONSOLE_ACTOR,
+            "changes": [{"key": c["key"], "from": _printable(c["from"]),
+                         "to": _printable(c["to"])} for c in changes],
+            "note": "saved; takes effect at the NEXT fire (every ledger item "
+                    "records the version that decided it)"}
 
 
 if __name__ == "__main__":

@@ -73,6 +73,11 @@ check("file values win", cfg2.filed_days == 14
 check("merge: absent keys keep env values", cfg2.scan_top == 200, cfg2.scan_top)
 check("version changed by the edit", cfg2.version == saved and
       saved != v1, (saved, v1))
+# The legs that CONSUME config.yaml may run as a different uid than whatever
+# wrote it, so the file must be world-readable — mkstemp's default 0600 was a
+# silent file->env flip waiting to happen (caught live 2026-10-24).
+mode = os.stat(ECFG.config_path(TMP)).st_mode & 0o777
+check("config.yaml is world-readable (0644)", mode == 0o644, oct(mode))
 
 print("== 3. journal is append-only + records actor ==")
 hist = ECFG.history(TMP)

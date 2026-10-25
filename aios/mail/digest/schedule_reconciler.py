@@ -195,7 +195,7 @@ def set_schedule(schedule=None, tz=None, actor="cli", state_dir=None, log=print)
     config, override only the named keys, then save the COMPLETE snapshot —
     never from_dict(partial), which would silently reset every other key to
     its default. Validation (cron/tz/1-per-hour) runs inside save()."""
-    state_dir = state_dir or os.environ.get("DIGEST_STATE_DIR", "/state")
+    state_dir = state_dir or ECFG.default_dir()
     cfg = ECFG.load(state_dir, log=log)
     merged = ECFG.asdict(cfg)
     merged.pop("source", None)
@@ -217,7 +217,7 @@ def main(argv=None):
         python3 schedule_reconciler.py --show              # config + next fires
     """
     argv = sys.argv[1:] if argv is None else list(argv)
-    state_dir = os.environ.get("DIGEST_STATE_DIR", "/state")
+    state_dir = ECFG.default_dir()
 
     if "--show" in argv:
         cfg = ECFG.load(state_dir)

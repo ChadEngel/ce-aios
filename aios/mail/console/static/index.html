@@ -38,6 +38,7 @@
   .sample{color:var(--dim);font-size:12px;padding:2px 0 2px 10px}
   .err{color:var(--err)}
   .ok{color:var(--ok)}
+  button.primary{background:var(--acc);color:#06121f;border-color:var(--acc);font-weight:600}
   a{color:var(--acc)}
 </style>
 </head>
@@ -46,7 +47,7 @@
   <header>
     <div><h1>✉️ AIOS Inbox Console</h1>
          <span class="chip">read-only · one box, one mailbox</span></div>
-    <div><span class="badge ro">READ-ONLY</span>
+    <div><span class="badge ro">READ-ONLY MAIL</span>
          <span class="badge" id="cfgver">config …</span></div>
   </header>
 
@@ -86,8 +87,8 @@
       <tr><th>Key</th><th>Value</th><th>Origin</th></tr>
       </thead><tbody></tbody></table>
     <p class="mini" style="margin-top:8px">Origin <b>file</b> = named in
-    config.yaml on /state (wins per-key) · <b>env</b> = supplied by the
-    k8s manifest · <b>default</b> = engine default. A config change takes
+    config.yaml in the config store (wins per-key) · <b>env</b> = supplied by
+    the k8s manifest · <b>default</b> = engine default. A config change takes
     effect at the NEXT fire; every ledger item records the version that
     decided it.</p>
   </section>
@@ -105,18 +106,28 @@
   </section>
 
   <section>
-    <h2>Dry-run preview — what would a rule change do?</h2>
-    <div class="banner">Preview only — nothing is saved, nothing is moved.
-    Computed against the newest ledger items with the HYPOTHETICAL rules.
-    (The "you email this person" tier needs live sent-folder data, so it is
-    excluded from previews.)</div>
+    <h2>Edit config <span class="chip">step 5 · writes the config store only</span></h2>
+    <div class="banner">This is the console's ONLY write path. A save writes
+    <b>config.yaml + a journal row</b> (with your actor) — never mail. The
+    ledger's volume stays mounted read-only, so nothing here can touch it.
+    Every edit renders a diff and requires <b>Save</b>; validation refuses
+    destructive values (remote models, negative retention, bad schedules,
+    unknown keys) before anything is written.</div>
     <textarea id="ov" spellcheck="false">{
   "filed_days": 14,
   "privacy_domains": ["spokeo.com", "whitepages.com"]
 }</textarea>
-    <div style="margin-top:10px"><button id="drybtn">Compute preview</button>
-      <span id="drymeta" class="chip" style="margin-left:10px"></span></div>
+    <div style="margin-top:10px">
+      <button id="drybtn">Preview effect on mail</button>
+      <button id="diffbtn">Preview config diff</button>
+      <span id="drymeta" class="chip" style="margin-left:10px"></span>
+    </div>
     <div id="dryout" style="margin-top:14px"></div>
+    <div id="savebar" style="margin-top:10px; display:none">
+      <button id="savebtn" class="primary">Save config</button>
+      <span class="mini" style="margin-left:8px">writes config.yaml + journal
+      (actor: <span id="actor">?</span>) — takes effect at the next fire</span>
+    </div>
   </section>
 
   <footer class="mini">Boundaries: this console has no mutation endpoints;
@@ -222,7 +233,7 @@ async function dryrun() {
   try { ov = JSON.parse(document.getElementById('ov').value); }
   catch (e) {
     out.innerHTML = `<p class="err">JSON parse error: ${esc(e.message)}</p>`;
-    btn.disabled = false; btn.textContent = 'Compute preview'; return;
+    btn.disabled = false; btn.textContent = 'Preview effect on mail'; return;
   }
   const r = await fetch('/api/dryrun', {
     method:'POST', headers:{'Content-Type':'application/json'},
@@ -241,9 +252,71 @@ async function dryrun() {
          + g.sample.map(smp=>`<div class="sample">· ${esc(smp.subject)}</div>`).join(''))
         .join('');
   }
-  btn.disabled = false; btn.textContent = 'Compute preview';
+  btn.disabled = false; btn.textContent = 'Preview effect on mail';
 }
+
+function _overrides() {
+  return JSON.parse(document.getElementById('ov').value);   // caller catches
+}
+
+async function diff() {
+  const btn = document.getElementById('diffbtn');
+  btn.disabled = true; btn.textContent = 'Computing…';
+  const out = document.getElementById('dryout');
+  document.getElementById('savebar').style.display = 'none';
+  let ov;
+  try { ov = _overrides(); }
+  catch (e) {
+    out.innerHTML = `<p class="err">JSON parse error: ${esc(e.message)}</p>`;
+    btn.disabled = false; btn.textContent = 'Preview config diff'; return;
+  }
+  const r = await fetch('/api/config/diff', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({overrides: ov})});
+  const j = await r.json();
+  if (r.status !== 200) {
+    out.innerHTML = `<p class="err">${esc(j.detail||('HTTP '+r.status))}</p>`;
+  } else if (!j.changes.length) {
+    out.innerHTML = '<p class="ok">No config change — nothing to save.</p>';
+  } else {
+    out.innerHTML = '<table><thead><tr><th>key</th><th>from</th><th>to</th></tr></thead><tbody>'
+      + j.changes.map(c=>`<tr><td><code>${esc(c.key)}</code></td>
+        <td>${esc(c.from)}</td><td class="ok">${esc(c.to)}</td></tr>`).join('')
+      + '</tbody></table>'
+      + `<p class="mini">${j.current_version} → <b>${j.proposed_version}</b></p>`;
+    document.getElementById('savebar').style.display = 'block';
+  }
+  btn.disabled = false; btn.textContent = 'Preview config diff';
+}
+
+async function save() {
+  const btn = document.getElementById('savebtn');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const out = document.getElementById('dryout');
+  let ov;
+  try { ov = _overrides(); }
+  catch (e) { out.innerHTML = `<p class="err">JSON parse error: ${esc(e.message)}</p>`;
+    btn.disabled = false; btn.textContent = 'Save config'; return; }
+  const r = await fetch('/api/config/save', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({overrides: ov, confirm: true})});
+  const j = await r.json();
+  document.getElementById('savebar').style.display = 'none';
+  if (r.status !== 200) {
+    out.innerHTML = `<p class="err">${esc(j.detail||('HTTP '+r.status))}</p>`;
+  } else if (!j.saved) {
+    out.innerHTML = '<p class="ok">No change — nothing written.</p>';
+  } else {
+    out.innerHTML = `<p class="ok">Saved ${esc(j.version)} as ${esc(j.actor||'?')} — takes effect at the next fire.</p>`
+      + j.changes.map(c=>`<div class="sample">· ${esc(c.key)}: ${esc(c.from)} → ${esc(c.to)}</div>`).join('');
+    load();   // refresh rules/journal/provenance
+  }
+  btn.disabled = false; btn.textContent = 'Save config';
+}
+
 document.getElementById('drybtn').onclick = dryrun;
+document.getElementById('diffbtn').onclick = diff;
+document.getElementById('savebtn').onclick = save;
 load();
 </script>
 </body>

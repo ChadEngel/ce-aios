@@ -175,6 +175,24 @@ in ns `ai`, HTTP Basic (secret `aios-console-auth`), one deployment:
   (needs live sent-folder data the ledger doesn't carry) — shown in the UI.
 - **Editing is deliberately ABSENT** (build-order step 5, ships after this
   console is proven true over a live window).
+
+### §10b Step 5 — editing UI SHIPPED (console 0.6.3, 2026-10-24)
+
+The console now has **one** write path: the config store. The design keeps the
+ledger-untouchable guarantee by **structural isolation**: the config store is a
+subdirectory (`<state>/config/`) mounted **separately read-write** at `/config`,
+while `/state` stays **read-only**. So a console bug can edit config but cannot
+open `ledger.jsonl` for writing, whatever path it builds (proved live: root RO
+mount denies the ledger, the subPath mount allows only the subdir).
+
+Endpoints: `POST /api/config/diff` (pure preview, nothing written) and
+`POST /api/config/save` (requires `confirm:true`; validates → journals the actor
+(D5) → writes the complete snapshot; a no-op writes nothing). `/api/dryrun`
+stays the "what would this do to your mail" preview. The UI renders the config
+diff and needs an explicit Save; the actor (`CONSOLE_ACTOR`) lands in the
+journal. Destructive edits (negative retention, remote models, bad schedules,
+unknown keys) are refused with 400 **before** any write. tests: console 65
+(was 41).
 - Self-tests offline: `selftest_console.py` (20 checks; includes a proof the
   state dir is BYTE-IDENTICAL around every preview), engine 33 (incl. new
   negative-int regression), state 21 (incl. new rolling-backup check).
