@@ -56,8 +56,10 @@ def check(name, cond, detail=""):
         print(f"  FAIL  {name}  {detail}")
 
 
-def cls(mid, ctype="other", _file=None, privacy=None, notice=None, unread=True):
+def cls(mid, ctype="other", _file=None, privacy=None, notice=None,
+        unread=True, code=None):
     return {"type": ctype, "_file": _file, "_privacy": privacy,
+            "_code": code,
             "_self_notice": notice, "_id": mid, "_fid": "raw-" + mid,
             "_unread": unread, "from": {"emailAddress": {"name": "S",
                                                          "address": "s@e.com"}},
@@ -206,6 +208,30 @@ before = open(os.path.join(TMP, "last_digest_report")).read()
 D._advance_cursor([])
 check("nothing to advance is a no-op (cursor unchanged)",
       open(os.path.join(TMP, "last_digest_report")).read() == before)
+
+print("== 12. one-time-code tier: content is WITHHELD from the post ==")
+# Codes are excluded from the prose entirely (select_fresh) AND from the
+# privacy section; only a content-free count reaches the comment. This is a
+# SECURITY property: the digest posts to a GitHub issue and the code is often
+# in the subject line.
+items = [cls("code1", code="model-suggested one-time/login code (kept)"),
+         cls("code2", code="code subject match"),
+         cls("p9", "priority")]
+fresh = D.select_fresh(items, set(), filed_set=set())
+check("code items excluded from prose",
+      all(not c["_id"].startswith("code") for c in fresh),
+      [c["_id"] for c in fresh])
+check("a genuine priority still reports",
+      [c["_id"] for c in fresh] == ["p9"], fresh)
+# the count line is content-free and present
+body = D.comment_body("prose", {}, 0, [], code_count=2)
+check("content-free code count appears",
+      "2 one-time code" in body and "content withheld" in body, body)
+check("no code content leaks into the body",
+      "subj-code" not in body, body)
+# and the section is omitted when there is nothing to say
+check("no code line when count is zero",
+      "one-time code" not in D.comment_body("prose", {}, 0, []))
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

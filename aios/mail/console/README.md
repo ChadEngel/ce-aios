@@ -23,6 +23,12 @@ What it shows (`GET /api/state`):
   both legs (`prose` needs >=8k context; both must be LOCAL — a remote id is
   refused at save). The catalogue is fetched by the filer (which holds the
   gateway key) and read here read-only; this console makes no LLM calls.
+- **One-time-code tier (0.6.4)**: keeps login/2FA/verification mail in the
+  inbox. `code_on` / `code_llm_on` / `code_domains` / `code_subjects` are
+  editable like any other config key; code-kept mail shows in the dashboard's
+  keeps list with the "one-time code" reason. (Code *content* is never posted
+  to the digest issue — only a count; the console shows the ledger's snippet,
+  which is the same rule as every other tier.)
 
 What it computes (`POST /api/dryrun`, no persistence anywhere):
 - **Dry-run preview**: a hypothetical config (validated, unknown keys and
@@ -66,7 +72,7 @@ true over a live window.
 ## Build & deploy
 ```bash
 docker buildx build --platform linux/amd64 --load \
-  -t caehomelab/aios-mail-console:0.6.4 \
+  -t caehomelab/aios-mail-console:0.6.5 \
   --file aios/mail/console/Dockerfile aios/mail/
 
 kubectl -n ai create secret generic aios-console-auth \

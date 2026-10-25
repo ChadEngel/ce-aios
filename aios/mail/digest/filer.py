@@ -238,23 +238,48 @@ def main():
             log(f"compaction skipped: {str(exc)[:80]}")
         log("nothing new — idle")
         return
-
-    # --- 3. Privacy tier layer 2 (model can only KEEP; failure = fail safe).
-    candidates = [c for c in unseen if c.get("_file") and not c.get("_privacy")
-                  and not c.get("_self_notice")]
+    # --- 3. Keep-passes (model can only KEEP; failure = fail safe).
+    #        Two tiers, same asymmetry rule, run in order: privacy (data-removal
+    #        correspondence) then one-time codes (login/2FA). Each excludes what
+    #        the previous one already kept, so a message is attributed to the
+    #        more specific tier and no candidate is sent twice.
     held = []
-    if D.PRIVACY_ON and D.PRIVACY_LLM_ON and candidates:
+
+    def _keep_pass(cands, enabled, fn, stamp, label):
+        """Run one model keep-pass over `cands`. Returns the held subset on
+        failure (so nothing is filed on a model outage) — the fail-safe shared
+        by both tiers. A returned id is only ever turned into a KEEP."""
+        if not (enabled and cands):
+            return []
         try:
-            kept = D.privacy_llm_keeps(candidates)
-            for c in candidates:
+            kept = fn(cands)
+            for c in cands:
                 if c["_id"] in kept:
-                    c["_privacy"] = "model-suggested data-removal mail (kept)"
+                    c[stamp] = label
                     c["_file"] = None
+            return []
         except Exception as exc:
-            log(f"privacy llm FAILED — holding {len(candidates)} candidate(s) "
-                f"from filing this run (fail safe): {str(exc)[:90]}")
-            held = candidates
-    log(f"privacy: {len([c for c in unseen if c.get('_privacy')])} kept; "
+            log(f"{stamp} llm FAILED — holding {len(cands)} candidate(s) from "
+                f"filing this run (fail safe): {str(exc)[:90]}")
+            return cands
+
+    p_cands = [c for c in unseen if c.get("_file") and not c.get("_privacy")
+               and not c.get("_self_notice")]
+    held += _keep_pass(p_cands, D.PRIVACY_ON and D.PRIVACY_LLM_ON,
+                       D.privacy_llm_keeps, "_privacy",
+                       "model-suggested data-removal mail (kept)")
+    # Code tier: exclude privacy-kept and already-held so we neither re-ask
+    # about a kept item nor stack holds (a held item retries next fire).
+    c_cands = [c for c in unseen if c.get("_file") and not c.get("_privacy")
+               and not c.get("_code") and not c.get("_self_notice")
+               and c not in held]
+    held += _keep_pass(c_cands, D.CODE_ON and D.CODE_LLM_ON,
+                       D.code_llm_keeps, "_code",
+                       "model-suggested one-time/login code (kept)")
+    for h in held:
+        h["_held"] = True
+    log(f"keep-passes: privacy {len([c for c in unseen if c.get('_privacy')])}, "
+        f"code {len([c for c in unseen if c.get('_code')])} kept; "
         f"held for retry: {len(held)}")
 
     # --- 4. Build the plan. Kept-in-inbox items get a durable 'keep' row too,
@@ -340,6 +365,7 @@ def _row(c, folder):
             "tier": "priority" if c.get("type") == "priority" else "other",
             "reason": c.get("reason"),
             "privacy": c.get("_privacy"),
+            "code": c.get("_code"),
             "self_notice": bool(c.get("_self_notice")),
             "unread": bool(c.get("_unread")),
             "received": c.get("_received")}

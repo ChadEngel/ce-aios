@@ -48,6 +48,18 @@ data:
   # mail stays in the inbox — never filed, never deleted.
   DIGEST_NOTICE_SENDERS: "notifications@github.com"
   DIGEST_NOTICE_SUBJECTS: "AIOS daily mail digest"
+  # One-time/verification-code tier (2026-10-24, Chad). Login/2FA codes, magic
+  # links and password resets MUST stay in the inbox — filing one away means a
+  # login the user cannot complete (codes expire in minutes). Layer 1 here is
+  # deterministic (empty domain list by default; subject patterns below);
+  # layer 2 is a local-only LLM keep-pass for the services/wording no static
+  # list anticipates. The model can only EVER keep (a false keep is clutter; a
+  # false file is a broken login). Code mail content is never posted to the
+  # digest issue (the subject often contains the live code) — only a count.
+  DIGEST_CODE_KEEP: "1"
+  DIGEST_CODE_LLM: "1"
+  DIGEST_CODE_DOMAINS: ""
+  DIGEST_CODE_SUBJECTS: "verification code,one[- ]?time (code|passcode|password|pin|link),(security|confirmation|authentication|access|sign[- ]?in|login) code,\\b(otp|totp|2fa|mfa)\\b,magic link,password reset,reset your password,temporary password,(verify|confirm) your (email|e-mail|account|identity|address|phone),your (verification|security|confirmation|authentication|one[- ]?time) (code|pin)"
   # Digest cadence (R1, user-scheduled — never hard-coded). Consumed by the
   # schedule reconciler on the filer heartbeat, which PATCHes the digest
   # CronJob when these differ from its spec. Values mirror the historic
