@@ -75,8 +75,19 @@ docker buildx build --platform linux/amd64 --load \
   -t caehomelab/aios-mail-console:0.6.6 \
   --file aios/mail/console/Dockerfile aios/mail/
 
-kubectl -n ai create secret generic aios-console-auth \
-  --from-literal=password='CHANGE-ME'
 kubectl kustomize aios/mail/console/k8s | ssh util-server kubectl apply -f -
 # import image on both workers, then: http://<node>:30080
 ```
+
+### Console password (Infisical-owned)
+
+The HTTP Basic password is **not** created by hand. It syncs from Infisical
+project `jarvis-jatg` / env `prod` / root path, key **`CONSOLE_PASSWORD`**, via
+`k8s/infisical-secret-sync.yaml` (same universal-auth credential as the digest
+and manager syncs). Rotate it by changing the Infisical key — the operator
+re-renders `aios-console-auth` within `resyncInterval` (60s); no redeploy.
+
+**Ordering matters:** `console.py`'s `require_auth()` returns early when
+`CONSOLE_PASSWORD` is empty, so the console **fails open** if the sync renders
+an empty value. Create the Infisical key BEFORE applying the sync manifest. See
+the ordering block at the top of `k8s/infisical-secret-sync.yaml`.

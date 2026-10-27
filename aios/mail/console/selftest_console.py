@@ -195,21 +195,45 @@ after2 = _tree_hash()
 check("still byte-identical after refusals", after2 == before)
 
 print("== 5. auth: password set -> refuse without header ==")
-C.PASSWORD = "secret123"
-refused = False
-try:
-    C.api_dryrun(Req(overrides={"filed_days": 14}))
-    refused = True   # PASSWORD only enforced via middleware in live server
-except Exception:
-    pass
-# Direct-call auth is checked at the middleware layer; assert the helper:
+# Auth: exercise the REAL require_auth() helper directly (the previous version
+# of this block was a no-op that could not fail). This matters because the
+# console FAILS OPEN when CONSOLE_PASSWORD is empty -- the failure mode of a
+# mis-rendered Infisical sync. Pin BOTH directions:
+#   * empty password  -> open (documented fail-open; guards the sync ordering)
+#   * set password    -> 401 without/with-wrong creds, pass with the right one
 import base64 as b64
-ok = C.require_auth(
-    {"headers": {"authorization": "Basic " + b64.b64encode
-                 (b"user:secret123").decode()}}) if False else True
-print(f"  (middleware auth exercised at runtime; direct-call path open by "
-      f" design: {refused or 'n/a'})")
+
+
+class _Req:
+    """Minimal stand-in for a Starlette Request (require_auth reads .headers)."""
+
+    def __init__(self, auth=None):
+        self.headers = {} if auth is None else {"authorization": auth}
+
+
+def _hdr(pw, user="chad"):
+    return "Basic " + b64.b64encode(f"{user}:{pw}".encode()).decode()
+
+
+def _status(req):
+    """HTTP status of an auth check: 200 if it passes, else the raised code."""
+    try:
+        C.require_auth(req)
+        return 200
+    except Exception as exc:
+        return getattr(exc, "status_code", 500)
+
+
+C.PASSWORD = "secret123"
+check("auth: no header -> 401", _status(_Req()) == 401, _status(_Req()))
+check("auth: wrong password -> 401",
+      _status(_Req(_hdr("wrong"))) == 401, _status(_Req(_hdr("wrong"))))
+check("auth: right password -> pass",
+      _status(_Req(_hdr("secret123"))) == 200, _status(_Req(_hdr("secret123"))))
 C.PASSWORD = ""
+check("auth: empty password FAILS OPEN (guards sync ordering)",
+      _status(_Req()) == 200,
+      "fail-open is expected; the Infisical key must exist before the sync")
 
 print("== 6. schedule view (R1) = read-only cadence + next fires ==")
 s3 = C._state_payload()
