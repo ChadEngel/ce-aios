@@ -5,8 +5,11 @@
 > verified; repo and cluster agree. Build-order steps 1→5 complete (editing UI
 > shipped 0.6.3). Console M3/M4 remain PARKED (M4 gated on the unanswered
 > second-person question) — see `decisions.md` 2026-10-27.
-> **#63 CLOSED as stale** — live re-verification shows VK scoping IS enforced
-> (unauth 401; read VK 12 read-only tools; file VK 5 mutating tools).
+> **#63 CLOSED as stale 2026-10-27** — live re-verification shows VK scoping IS
+> enforced (unauth 401; read VK 12 read-only tools; file VK 5 mutating tools).
+> (Note: the closing comment was posted earlier in the day but the issue was left
+> open until 18:34Z — this doc briefly claimed "closed" before the tracker
+> matched. Both now agree.)
 > Console auth sync **APPLIED 2026-10-27** — `aios-console-auth` is now owned by
 > `aios-console-auth-sync` (ownerReference, controller=true); all three
 > conditions True; console 401 without creds / 200 with.
@@ -56,7 +59,7 @@ N1/N2/N6 consolidated under **#33** — CLOSED 2026-10-07 (A + image pin + enfor
 | S8 | Revoke bootstrap Infisical service token once CLI admin no longer needed | OPEN | optional |
 | S9 | Delete old `influx-metrics-pusher` Job (plaintext write token in spec) and rotate INFLUXDB_TOKEN after cutover | OPEN | |
 | S10 | Canonicalize Infisical project names across docs | OPEN | |
-| S11 | **`jarvis-jatg-universal-auth` identity is NOT read-only** — the manager manifest (`aios/manager/k8s/infisical-secret-sync.yaml:30`) documents creating it with `role=read-only`, but a live `PATCH /api/v3/secrets/raw/CONSOLE_PASSWORD` with that identity's token **succeeded** (version 1→2). It is shared by 3 InfisicalSecret syncs (`aios-console-auth-sync`, `aios-mail-digest-secrets-sync`, `aios-manager-secrets-sync`), so anything that can read that K8s Secret can rewrite every secret in jarvis-jatg/prod. Not remotely exploitable (secret is only mounted into the operator), but it violates the documented least-privilege posture. Fix: set the identity's project role to read-only in the Infisical UI, then re-verify a PATCH returns 403. | OPEN |
+| S11 | **`jarvis-jatg-universal-auth` identity is NOT read-only** — the manager manifest (`aios/manager/k8s/infisical-secret-sync.yaml:30`) documents creating it with `role=read-only`, but a live `PATCH /api/v3/secrets/raw/CONSOLE_PASSWORD` with that identity's token **succeeded** (version 1→2). It is shared by 3 InfisicalSecret syncs (`aios-console-auth-sync`, `aios-mail-digest-secrets-sync`, `aios-manager-secrets-sync`), so anything that can read that K8s Secret can rewrite every secret in jarvis-jatg/prod. Not remotely exploitable (secret is only mounted into the operator), but it violates the documented least-privilege posture. Fix: set the identity's project role to read-only in the Infisical UI, then re-verify a PATCH returns 403. | OPEN — tracked as **#80** |
 | I1 | InfluxDB migration aiserver→cluster | DEFERRED | Chad 2026-10-04: **not cut over**; working as-is; **not a blocker** — don't treat as an open priority. |
 
 ## P1 — AI IT team
