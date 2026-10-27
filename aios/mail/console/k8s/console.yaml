@@ -6,9 +6,12 @@
 #                        console's sole write path; config.yaml + journal).
 # The mount boundary is the safety argument: the ledger is not merely
 # "not written" by this app, it is unwritable to it.
-# Auth: HTTP Basic over LAN; password lives in secret aios-console-auth
-# (create it once: kubectl -n ai create secret generic aios-console-auth
-#  --from-literal=password='...').
+# Auth: HTTP Basic over LAN; password lives in secret aios-console-auth,
+# which is OWNED BY INFISICAL (infisical-secret-sync.yaml in this dir) —
+# do not create it by hand. The Infisical key CONSOLE_PASSWORD in project
+# jarvis-jatg / prod is the source of truth; the operator renders the Secret.
+# NOTE: the console fails OPEN when CONSOLE_PASSWORD is empty, so the key must
+# exist BEFORE the sync is applied (ordering block in that manifest).
 apiVersion: v1
 kind: ServiceAccount
 metadata:

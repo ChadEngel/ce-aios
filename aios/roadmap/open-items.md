@@ -1,9 +1,20 @@
 # Open items (priority order) — refreshed 2026-10-06
 
+> **Mail stack FINISHED (2026-10-27)** — do not reopen without a new
+> requirement. Digest + filer (`0.6.4`) and console (`0.6.6`) are deployed and
+> verified; repo and cluster agree. Build-order steps 1→5 complete (editing UI
+> shipped 0.6.3). Console M3/M4 remain PARKED (M4 gated on the unanswered
+> second-person question) — see `decisions.md` 2026-10-27.
+> **#63 CLOSED as stale** — live re-verification shows VK scoping IS enforced
+> (unauth 401; read VK 12 read-only tools; file VK 5 mutating tools).
+> Remaining mail-stack item: **apply the console auth Infisical sync**
+> (`console/k8s/infisical-secret-sync.yaml`) AFTER the `CONSOLE_PASSWORD` key
+> exists — the console fails OPEN on an empty password. Value rotation still
+> pending (Chad: "rotate later").
+>
 > **Mail-digest pickup (2026-10-21):** session context + runbook for the
 > digest/console arc lives in `handoff-mail-digest-2026-10-21.md` — start
-> THERE for anything under `aios/mail/`. PR #65 merged (engine + config
-> store + read-only console 0.6.0 live).
+> THERE for anything under `aios/mail/`.
 
 > **Live queue moved to GitHub Issues** (`ChadEngel/ce-aios`) — see `manager-agent.md`. The tables below are the human-readable mirror; if they disagree with the issue tracker, **the issues win**.
 
