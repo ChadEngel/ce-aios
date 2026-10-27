@@ -36,6 +36,38 @@ from engine import config as ECFG         # noqa: E402
 
 PASS = FAIL = 0
 
+# Node harness used by section 13: executes the REAL served <script> against a
+# real state payload with a minimal DOM shim, and prints OK only if load()
+# renders every section without throwing. %s = html, %s = payload JSON.
+_JS_SIM = r'''
+import fs from 'fs';
+const html = %s;
+const s = %s;
+const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+const mk = () => ({innerHTML:'', textContent:'', style:{}, value:'{}', disabled:false, tBodies:[{innerHTML:''}]});
+const els = {};
+global.document = {getElementById:(id)=>{ if(!els[id]) els[id]=mk(); return els[id]; }, body:{innerHTML:''}};
+global.fetch = async (url)=>({status:200, json:async()=>{
+  const u = String(url);
+  if (u.includes('/api/config/diff')) return {current_version:'vA', proposed_version:'vB', changes:[{key:'filed_days', from:'10', to:'14'}], note:'x'};
+  if (u.includes('/api/config/save')) return {saved:false, version:'vA', changes:[], note:'no change'};
+  if (u.includes('/api/dryrun')) return {items_scanned:1, proposed_version:'vB', changed:0, changes:[], note:'x'};
+  return s;
+}});
+const AF = (async function(){}).constructor;
+const code = script.replace(/document\.getElementById\('drybtn'\)\.onclick = dryrun;\s*load\(\);\s*$/, '');
+const mod = await new AF(code + '\nreturn {load, diff, dryrun, save};')();
+await mod.load();
+for (const id of ['cards','fires','cadence','models','journal']) {
+  if (!els[id] || !els[id].innerHTML.length) throw new Error('section not rendered: '+id);
+}
+if (!els.rules.tBodies[0].innerHTML.length) throw new Error('rules table not rendered');
+if (!els.recent.tBodies[0].innerHTML.length) throw new Error('recent table not rendered');
+if (els.fires.innerHTML.includes('loading')) throw new Error('fires still loading');
+await mod.diff(); await mod.dryrun();
+console.log('OK');
+'''
+
 
 def check(name, cond, detail=""):
     global PASS, FAIL
@@ -327,6 +359,49 @@ check("config.save never names ledger.jsonl",
       "ledger" not in src.lower(), src[:80])
 check("state.LEDGER is outside the config store dir",
       os.path.dirname(ST.LEDGER) != CFG, (ST.LEDGER, CFG))
+
+print("== 13. front-end JS sanity: the served script must run, esc() must work ==")
+# This is the check that was MISSING and let a real bug ship: the console UI's
+# HTML-escape helper was malformed (the `[c]` lookup sat OUTSIDE the arrow
+# callback), so esc() threw on its FIRST call and every section after the cards
+# stayed on "loading…". HTTP 200 never proved the JS ran. We now execute the
+# actual served <script> in node (if present) against a real payload, and
+# assert the key sections render. Skips cleanly when node is unavailable.
+import re as _re
+import shutil as _shutil
+import subprocess as _sp
+
+_html = open(os.path.join(PARENT, "static", "index.html"), encoding="utf-8").read()
+_script = _re.search(r"<script>([\s\S]*?)</script>", _html)
+check("index.html embeds a script", bool(_script))
+_js = _script.group(1)
+# static guards that need no JS runtime (always run):
+# The buggy 0.6.0 form applied the [c] lookup to the CALLBACK's result:
+#   /g,c=>({...}))[c]||c   -> reads `c` outside the callback -> throws on use
+# Correct: the map is indexed INSIDE the callback -> ...}[c]));  So the buggy
+# signature is the exact substring "))[c]||c" applied after a => callback.
+# Check the esc DEFINITION LINE only (the bug's description lives in a comment).
+check("esc() map lookup is inside the callback, not applied to its result",
+      "))[c]||c" not in _re.sub(r"//[^\n]*", "", _js).replace(" ", ""),
+      "malformed esc(): the [c] lookup is outside the callback")
+check("esc() escapes the angle brackets too",
+      "'<':'&lt;'" in _js and "'>':'&gt;'" in _js, "esc map incomplete")
+check("every section element the loader needs exists",
+      all(f'id="{i}"' in _html for i in
+          ("cards", "fires", "cadence", "models", "rules", "journal",
+           "recent", "dryout")), "missing section id")
+
+_node = _shutil.which("node")
+if not _node:
+    print("  (node not installed — skipping the execute-the-script check)")
+else:
+    payload = C._state_payload()      # a real payload, same shape the browser gets
+    sim = os.path.join(TMP, "sim.mjs")
+    with open(sim, "w", encoding="utf-8") as fh:
+        fh.write(_JS_SIM % (json.dumps(_html), json.dumps(payload)))
+    out = _sp.run([_node, sim], capture_output=True, text=True, timeout=60)
+    check("served script executes and load() renders all sections",
+          "OK" in out.stdout, (out.stdout[-400:], out.stderr[-400:]))
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
