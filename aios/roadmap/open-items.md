@@ -7,10 +7,19 @@
 > second-person question) — see `decisions.md` 2026-10-27.
 > **#63 CLOSED as stale** — live re-verification shows VK scoping IS enforced
 > (unauth 401; read VK 12 read-only tools; file VK 5 mutating tools).
-> Remaining mail-stack item: **apply the console auth Infisical sync**
-> (`console/k8s/infisical-secret-sync.yaml`) AFTER the `CONSOLE_PASSWORD` key
-> exists — the console fails OPEN on an empty password. Value rotation still
-> pending (Chad: "rotate later").
+> Console auth sync **APPLIED 2026-10-27** — `aios-console-auth` is now owned by
+> `aios-console-auth-sync` (ownerReference, controller=true); all three
+> conditions True; console 401 without creds / 200 with.
+> **Two corrections found while applying it (docs fixed):**
+> 1. The original "delete the Secret, the operator recreates it" step was WRONG —
+>    the operator short-circuits on an unchanged Infisical server ETag
+>    (`Secrets unchanged (server ETag match), skipping reconciliation`) and will
+>    not recreate a deleted Secret. You must delete the **InfisicalSecret** too.
+> 2. Rotation is **not** restart-free. The Secret updates in ~15s but
+>    `console.py` binds `CONSOLE_PASSWORD` at process start, so the running pod
+>    keeps the old password until `kubectl -n ai rollout restart deploy/aios-console`.
+>    Measured: old password 200 / new password 401 until restart.
+> Value rotation still pending (Chad: "rotate later") — it now needs sync + rollout.
 >
 > **Mail-digest pickup (2026-10-21):** session context + runbook for the
 > digest/console arc lives in `handoff-mail-digest-2026-10-21.md` — start
@@ -47,6 +56,7 @@ N1/N2/N6 consolidated under **#33** — CLOSED 2026-10-07 (A + image pin + enfor
 | S8 | Revoke bootstrap Infisical service token once CLI admin no longer needed | OPEN | optional |
 | S9 | Delete old `influx-metrics-pusher` Job (plaintext write token in spec) and rotate INFLUXDB_TOKEN after cutover | OPEN | |
 | S10 | Canonicalize Infisical project names across docs | OPEN | |
+| S11 | **`jarvis-jatg-universal-auth` identity is NOT read-only** — the manager manifest (`aios/manager/k8s/infisical-secret-sync.yaml:30`) documents creating it with `role=read-only`, but a live `PATCH /api/v3/secrets/raw/CONSOLE_PASSWORD` with that identity's token **succeeded** (version 1→2). It is shared by 3 InfisicalSecret syncs (`aios-console-auth-sync`, `aios-mail-digest-secrets-sync`, `aios-manager-secrets-sync`), so anything that can read that K8s Secret can rewrite every secret in jarvis-jatg/prod. Not remotely exploitable (secret is only mounted into the operator), but it violates the documented least-privilege posture. Fix: set the identity's project role to read-only in the Infisical UI, then re-verify a PATCH returns 403. | OPEN |
 | I1 | InfluxDB migration aiserver→cluster | DEFERRED | Chad 2026-10-04: **not cut over**; working as-is; **not a blocker** — don't treat as an open priority. |
 
 ## P1 — AI IT team

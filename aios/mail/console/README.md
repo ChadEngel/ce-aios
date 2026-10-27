@@ -84,10 +84,37 @@ kubectl kustomize aios/mail/console/k8s | ssh util-server kubectl apply -f -
 The HTTP Basic password is **not** created by hand. It syncs from Infisical
 project `jarvis-jatg` / env `prod` / root path, key **`CONSOLE_PASSWORD`**, via
 `k8s/infisical-secret-sync.yaml` (same universal-auth credential as the digest
-and manager syncs). Rotate it by changing the Infisical key — the operator
-re-renders `aios-console-auth` within `resyncInterval` (60s); no redeploy.
+and manager syncs).
+
+**To rotate:** change `CONSOLE_PASSWORD` in Infisical. The operator re-renders
+the `aios-console-auth` Secret within `resyncInterval` (60s) — but that alone
+does **not** change what the console accepts. `console.py` reads
+`CONSOLE_PASSWORD` **once at process start** (`PASSWORD = os.environ.get(...)`
+at module level) and the Deployment consumes it via `secretKeyRef` env, so the
+running pod keeps the old value until it restarts. A rotation therefore needs
+the sync **and** a rollout:
+
+```sh
+kubectl -n ai rollout restart deploy/aios-console
+```
+
+Measured 2026-10-27 (operator v0.10.34): after changing the Infisical value the
+Secret updated in **~15s**, but the running console still returned **200** for
+the old password and **401** for the new one — until a restart. The operator's
+auto-redeploy does not cover this Deployment (`AutoRedeployReady` reports
+"0 deployments"), and the `secrets.infisical.com/auto-reload` annotation had no
+effect. So: sync + explicit rollout. There is no restart-free rotation today.
 
 **Ordering matters:** `console.py`'s `require_auth()` returns early when
 `CONSOLE_PASSWORD` is empty, so the console **fails open** if the sync renders
 an empty value. Create the Infisical key BEFORE applying the sync manifest. See
 the ordering block at the top of `k8s/infisical-secret-sync.yaml`.
+
+**Do not "delete the Secret to test the sync."** The operator short-circuits on
+the Infisical server ETag: when the remote value is unchanged it logs
+`Secrets unchanged (server ETag match), skipping reconciliation` and will **not**
+recreate a deleted Secret. Re-applying the same InfisicalSecret doesn't help
+either (same cached ETag) — you must delete the **InfisicalSecret** too so a
+fresh object forces a new reconcile. The running pod keeps its old env, so the
+console keeps serving, but a pod restart in that window leaves it unable to
+start. Verified 2026-10-27 on operator v0.10.34.
