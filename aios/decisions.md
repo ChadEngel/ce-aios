@@ -1,5 +1,33 @@
 # Decision log (AIOS) — newest first. Why we chose X, so nobody re-litigates it.
 
+## 2026-10-27 — Mail stack declared FINISHED; console password moves to Infisical
+Chad: "lets finish the mail stack." The mail stack (digest + filer + console) is
+now closed out rather than extended. Three closing items, no new features:
+
+- **Console password → Infisical.** `aios-console-auth` was the last
+  hand-placed secret in ns `ai` (created 2026-10-21 with `kubectl create
+  secret`, never in git), so it had no rotation path and violated the
+  all-secrets-in-Infisical rule. Now synced from Infisical `jarvis-jatg`/prod
+  key `CONSOLE_PASSWORD` via `console/k8s/infisical-secret-sync.yaml`, sharing
+  the digest/manager `jarvis-jatg-universal-auth` credential. **Decision
+  (Chad): sync the CURRENT value now, rotate later** — rotation is deliberately
+  deferred, not forgotten.
+- **#63 closed as stale.** Its 2026-10-18 evidence (VKs absent from
+  `config.db`, `/mcp` auth unenforced) no longer reproduces: live matrix is
+  unauth 401 / bogus 401 / read VK 200 with **12 read-only tools** / file VK
+  200 with **5 mutating tools**. Segregation is enforced, not advisory. No
+  code change; T6/#32 remains the separate, optional hardening item.
+- **Boundary (why nothing else was built):** console M3 (actions/undo/adapters)
+  and M4 (appliance + pilot user #2) stay PARKED. M4 is gated on an unanswered
+  question (the second-person destination); building them is *starting*, not
+  *finishing*, and competes with the open P0 secrets work.
+- **Known trap, now recorded:** the console **fails OPEN** when
+  `CONSOLE_PASSWORD` is empty (`require_auth()` returns early). The operator
+  renders a missing Infisical key as an empty string silently, so the
+  Infisical key MUST exist before the sync manifest is applied — otherwise the
+  console becomes unauthenticated on the LAN. The ordering block lives at the
+  top of the sync manifest and a selftest pins the fail-open behavior.
+
 ## 2026-10-17 — Inbox Console: per-user appliance with delegated Entra auth (D1–D7)
 Chad's direction: package the mail-digest manager as a UI + micro VM for any user, Entra login so the setup knows whose mailbox it manages. Design = `roadmap/inbox-console.md`, issue #60. Key calls:
 

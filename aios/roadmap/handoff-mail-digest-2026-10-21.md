@@ -54,9 +54,9 @@
 
 | Object | Value |
 |---|---|
-| Digest CronJob | `aios-mail-digest`, image `caehomelab/aios-mail-digest:0.5.3`, `imagePullPolicy: Never`, `0 5,12,17 * * *` America/Chicago |
+| Digest CronJob | `aios-mail-digest`, image `caehomelab/aios-mail-digest:0.6.4`, `imagePullPolicy: Never`, `0 5,12,17 * * *` America/Chicago |
 | Filer CronJob | `aios-mail-filer`, same image, `*/5 * * * *`, pages inbox fully (FILER_PAGE_SIZE 100) |
-| Console | Deployment `aios-console`, image `caehomelab/aios-mail-console:0.6.0`, Service NodePort **30080**, HTTP Basic auth (secret `aios-console-auth`, key `password` — value lives ONLY in the cluster) |
+| Console | Deployment `aios-console`, image `caehomelab/aios-mail-console:0.6.6`, Service NodePort **30080**, HTTP Basic auth (secret `aios-console-auth`, key `password` — Infisical-owned, see §8) |
 | State | PVC `aios-mail-state` 1Gi RWX nfs-client uid `pvc-239dc1e3-c659-422f-afc2-54b5cf446596` — **this volume is NEVER deleted/recreated again** (see §7; verify uid unchanged during any pickup) |
 | Ledger | `/state/ledger.jsonl` (+ compact's `ledger-prev.jsonl`); ~1300 rows, 458 items, 0 unresolved; ledger rows whose outcomes were lost in the incident are NOT rebuilt — unconfirmed items stay retention-protected forever (F5) |
 | Config version | `v6635667ca6` (source=env, prose/privacy `ollama/qwen3.8:latest`) — must stay identical across digest, filer, console logs |
@@ -135,8 +135,11 @@ verify the PVC uid is `pvc-239dc1e3…` during any pickup.
 
 - Infisical project `jarvis-jatg` env `prod` root path — VKs + GitHub app
   (hyphen-free key names; see `k8s/infisical-secret-sync.yaml` header).
-- Console password: secret `aios-console-auth` (created live via
-  `kubectl create secret`; NOT in git).
+- Console password: secret `aios-console-auth`, now OWNED BY INFISICAL
+  (PR: `console/k8s/infisical-secret-sync.yaml`, key `CONSOLE_PASSWORD` in
+  `jarvis-jatg`/prod). Previously hand-created live and not in git. NOTE: the
+  key must exist BEFORE the sync is applied — the console fails OPEN on an
+  empty password.
 - Bifrost URL is literal env (`https://llm.caehomelab.com`), not a secret.
 
 ## 9. Gotchas learned 2026-10-21 (the hard-won ones)
@@ -171,7 +174,12 @@ verify the PVC uid is `pvc-239dc1e3…` during any pickup.
 | 2. cfg-version stamped on ledger rows | ✅ 0.5.x | filer.py intent rows `"cfg"` |
 | 3. dry-run preview | ✅ 0.6.0 | console /api/dryrun |
 | 4. read-only console | ✅ 0.6.0 | console/ (live window runs from now) |
-| 5. editing UI (diff-save + journal actor) | **NEXT — only after the console proves true** | inbox-console.md §10 boundaries |
+| 5. editing UI (diff-save + journal actor) | ✅ 0.6.3 (console 0.6.4) — 2026-10-24 | inbox-console.md §10b |
+
+**Queue 1→5 is COMPLETE** (verified 2026-10-27). Also shipped since: R1
+user-scheduled cadence (0.6.0), R2 model picker (0.6.1/0.6.2), one-time/
+verification-code keep tier (0.6.4), console `esc()` render fix (0.6.6).
+Repo and cluster agree: digest/filer `0.6.4`, console `0.6.6`.
 
 Design inputs already agreed (2026-10-21, Chad): **R1** user schedules
 (`digest_schedule`+`digest_tz` ↔ filer-heartbeat CronJob patcher, RBAC

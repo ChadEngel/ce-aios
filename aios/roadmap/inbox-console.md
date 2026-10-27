@@ -1,9 +1,12 @@
 # Inbox Console — a per-user management UI + appliance for the mail digest
 
-**Status:** M1 DONE (engine extracted + shipped 0.5.0→0.5.2, 2026-10-21 —
-see `helpdesk-mail-agent.md` M1 notes). Read-only console + dry-run preview
-SHIPPED 0.6.0, 2026-10-22 (steps 3–4 of the build order: config store ✅ →
-cfg-version stamps ✅ → dry-run preview ✅ → read-only UI ✅ → editing LAST).
+**Status (2026-10-27): mail stack FINISHED.** Build-order steps 1→5 all DONE
+(editing UI shipped 0.6.3 / console 0.6.4, 2026-10-24). M0/M2/M3/M4 remain
+PARKED — M4 is gated on the unanswered "second person" destination question;
+see `decisions.md` 2026-10-27. M1 DONE (engine extracted + shipped
+0.5.0→0.5.2, 2026-10-21 — see `helpdesk-mail-agent.md` M1 notes). Read-only
+console + dry-run preview SHIPPED 0.6.0, 2026-10-22 (steps 3–4: config store ✅
+→ cfg-version stamps ✅ → dry-run preview ✅ → read-only UI ✅ → editing ✅).
 **INCIDENT 2026-10-21 14:23Z** recorded in §11 (state PVC deleted/recreated
 in the 0.5.x rollout; historic ledger unrecoverable; mail untouched).
 **Related:** `helpdesk-mail-agent.md` (the live digest agent this manages), `ai-it-team.md` (hire #4), #50 (digest report thread), PR #57 (protected senders + folder-scoped scan), PR #58 (session 9 cont. 6 — the whole-mailbox listing find).
