@@ -1,0 +1,46 @@
+# NOC sweep egress policy — mirrors the mail digest's posture.
+#
+# The job must reach llm.caehomelab.com (192.168.30.217, RFC1918, Traefik ->
+# Bifrost) and api.github.com (public), so 443 is allowed to ANY destination
+# including RFC1918 — Microsoft/GitHub publish no stable CIDR and Bifrost is a
+# LAN address. Egress-only: nothing may call this job.
+#
+# The tool plane itself (mcp-grafana) is reached by Bifrost inside the cluster,
+# NOT by this job — the job only ever talks to Bifrost over 443. That is why
+# there is no cluster-internal egress rule here: adding one would widen the
+# policy for a hop this pod does not make.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aios-noc-netpol
+  namespace: ai
+  labels:
+    app.kubernetes.io/name: aios-noc
+    app.kubernetes.io/part-of: aios
+spec:
+  podSelector:
+    matchLabels:
+      app: aios-noc
+  policyTypes:
+    - Egress
+  egress:
+    # kube-dns only; no other cluster-internal ports needed besides 443.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # HTTPS anywhere: Bifrost (RFC1918) + api.github.com (public).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443

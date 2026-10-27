@@ -10,6 +10,37 @@ it carries the rules that must never be missed, and points at the full set.
 3. `aios/decisions.md` — dated why-we-chose-X. Read before re-litigating anything.
 4. `aios/roadmap/open-items.md` — the human-readable backlog (issues are the source of truth).
 
+## THE LOOP RULE — absolute, overrides everything else below
+
+**The moment you notice you are repeating a shape, STOP. Not after the next
+call. Immediately. Then say what you have.**
+
+A repeat is any of these:
+
+- The same question asked twice, even reworded.
+- Two or more calls that returned (or would return) the same fact.
+- Reading about a thing you already decided to do.
+- Announcing an action ("now let me build X") and then making a tool call that
+  is not that action. **This is the loop.** The next call after an announcement
+  must BE the announced action, or you must say you are not doing it.
+- Re-checking a value/object/state you already checked in this thread.
+
+**When you stop, do exactly three things — no tool calls:**
+
+1. State plainly: "I'm looping."
+2. State what you already have (the facts, from context — not a re-read).
+3. Either give the answer/next action, or ask the one question that unblocks
+   you. Never a fourth option.
+
+**Check for confusion, not just repetition.** Before repeating anything, ask:
+*is the thing I am about to look at possibly stale, ambiguous, or
+self-contradictory?* If yes, that is the finding — say so instead of querying
+it again. Repeatedly checking a confusing source is how the loop starts.
+
+**A loop is a stop signal, not a diligence signal.** More calls never fix a
+loop; they only make it longer. There is no exception for "one more check to be
+sure." Being sure is what the rules below are for; being stopped is this rule.
+
 ## Bounded investigation (anti-loop) — inlined because it must never be missed
 
 An agent once answered a one-line question with ten read/grep calls and no

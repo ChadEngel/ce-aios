@@ -1,0 +1,72 @@
+# NOC triage sweep — R0, read-only. Posts a report to the NOC issue thread.
+#
+# Schedule: twice daily. The NOC job is "what's broken / what changed?", which
+# does not need minute-level resolution — a stale source is measured in hours
+# (STALE_HOURS=6). Two fires/day keeps the thread readable and the R0 review
+# window (2 weeks, per the promotion gate) to ~28 reports.
+#
+# nodeSelector pins to the amd64 workers because the image is node-locally
+# imported (`imagePullPolicy: Never`), same as the mail digest. Import the same
+# tag on BOTH workers so the sweep still runs if one dies.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: aios-noc
+  namespace: ai
+  labels:
+    app.kubernetes.io/name: aios-noc
+    app.kubernetes.io/part-of: aios
+spec:
+  schedule: "15 6,18 * * *"
+  timeZone: America/Chicago
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 1800
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 259200
+      template:
+        metadata:
+          labels:
+            app: aios-noc
+        spec:
+          restartPolicy: Never
+          nodeSelector:
+            kubernetes.io/arch: amd64
+          containers:
+            - name: noc
+              image: caehomelab/aios-noc:0.1.0
+              imagePullPolicy: Never
+              envFrom:
+                - secretRef:
+                    name: aios-noc-secrets
+              env:
+                - name: BIFROST_URL
+                  value: "https://llm.caehomelab.com"
+                # The NOC output thread. #17 is the hire issue; replace with a
+                # dedicated thread when this graduates out of R0 review.
+                - name: NOC_ISSUE_NUMBER
+                  value: "17"
+                - name: GITHUB_INSTALLATION_ID
+                  value: "168700840"
+                - name: NOC_WINDOW_HOURS
+                  value: "24"
+                - name: NOC_STALE_HOURS
+                  value: "6"
+              resources:
+                requests:
+                  memory: 64Mi
+                  cpu: 25m
+                limits:
+                  memory: 256Mi
+                  cpu: 250m
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 65534
+                runAsGroup: 65534
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                seccompProfile:
+                  type: RuntimeDefault
