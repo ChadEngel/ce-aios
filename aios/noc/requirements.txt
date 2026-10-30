@@ -1,0 +1,10 @@
+# aios-noc dependencies.
+#
+# Kept minimal and PINNED to match the first (image-only) build exactly:
+#   pyjwt[crypto]==2.9.0  (RS256 needs cryptography)
+# tzdata is a system package in the Dockerfile, not a pip dep.
+#
+# NOTE: noc.py itself imports only the stdlib + pyjwt — it speaks raw HTTP to
+# the MCP gateway and GitHub, so there is no MCP client library or `requests`
+# dependency to keep in sync.
+pyjwt[crypto]==2.9.0

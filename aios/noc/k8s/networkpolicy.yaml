@@ -1,0 +1,43 @@
+# AIOS NOC — egress-only NetworkPolicy.
+#
+# The NOC talks to exactly two things outside the pod: Bifrost/the MCP gateway
+# at llm.caehomelab.com (RFC1918, so 443 to ANY destination is required — same
+# reasoning as the mail digest's netpol) and api.github.com (public) to post
+# the report comment. Plus kube-dns for name resolution.
+#
+# Egress-only: nothing may call the NOC, and it never listens on a port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aios-noc-netpol
+  namespace: ai
+  labels:
+    app.kubernetes.io/name: aios-noc
+    app.kubernetes.io/part-of: aios
+spec:
+  podSelector:
+    matchLabels:
+      app: aios-noc
+  policyTypes:
+    - Egress
+  egress:
+    # kube-dns only; no other cluster-internal ports are needed.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # HTTPS anywhere: MCP/Bifrost (192.168.30.217, RFC1918) + api.github.com.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443

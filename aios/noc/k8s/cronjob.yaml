@@ -1,0 +1,76 @@
+# AIOS NOC agent — CronJob (R0 read-only triage, hire #1).
+#
+# Twice daily (06:15 / 18:15 America/Chicago). timeZone avoids DST wobble
+# (k8s >= 1.27, fine on this k3s). The job asks the `grafana_noc` MCP client a
+# fixed set of read-only questions and posts the findings as a comment on the
+# NOC issue. No model is involved in R0 — every report line is a measured fact.
+#
+# Concurrency Forbid: a slow sweep must not overlap the next slot.
+# startingDeadlineSeconds 1800: a missed 06:15 slot is still worth running up
+# to 30 min late; beyond that the next slot covers it.
+#
+# imagePullPolicy: Never — the image is imported node-locally into k3s, same as
+# the digest/filer/mail images. nodeSelector pins to the amd64 workers, which
+# are the ones that carry the imported tag (import to BOTH).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: aios-noc
+  namespace: ai
+  labels:
+    app.kubernetes.io/name: aios-noc
+    app.kubernetes.io/part-of: aios
+spec:
+  schedule: "15 6,18 * * *"
+  timeZone: America/Chicago
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 1800
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 259200
+      template:
+        metadata:
+          labels:
+            app: aios-noc
+        spec:
+          restartPolicy: Never
+          nodeSelector:
+            kubernetes.io/arch: amd64
+          containers:
+            - name: noc
+              image: caehomelab/aios-noc:0.1.1
+              imagePullPolicy: Never
+              envFrom:
+                - secretRef:
+                    # BIFROST_VK_AIOS_NOC, GITHUB_APP_ID,
+                    # GITHUB_APP_PRIVATE_KEY, GITHUB_APP_REPO
+                    name: aios-noc-secrets
+              env:
+                - name: BIFROST_URL
+                  value: "https://llm.caehomelab.com"
+                - name: NOC_ISSUE_NUMBER
+                  value: "17"
+                - name: GITHUB_INSTALLATION_ID
+                  value: "168700840"
+                - name: NOC_WINDOW_HOURS
+                  value: "24"
+                - name: NOC_STALE_HOURS
+                  value: "6"
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 64Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 65534
+                runAsGroup: 65534
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                seccompProfile:
+                  type: RuntimeDefault
