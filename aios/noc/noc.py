@@ -92,6 +92,22 @@ DEVICE_DATA_STALE_HOURS = float(os.environ.get("NOC_DEVICE_STALE_HOURS", "1"))
 EXPECTED_JOBS = [j.strip() for j in os.environ.get("NOC_EXPECTED_JOBS", "").split(",")
                  if j.strip()]
 
+# --- alert delivery (Pushover via the in-cluster bridge) -------------------
+# The NOC posted ONLY to the GitHub issue, so findings sat unread (its own
+# udm-syslog-stale line went unnoticed for days). This pushes actionable
+# findings to the phone through the EXISTING pushover-bridge, which holds the
+# Pushover credentials itself — so the NOC needs no Pushover secrets, just the
+# in-cluster URL. Match Grafana's webhook shape: that is the bridge's contract,
+# so we reuse it rather than inventing a second one.
+PUSHOVER_URL = os.environ.get("NOC_PUSHOVER_URL", "http://pushover-bridge:8080")
+# Push only when there is something worth waking up for. "all clear" never
+# pushes; a quiet background source (stale log) is below threshold by default
+# so the phone does not buzz twice a day on noise. Set NOC_ALERT_MIN to
+# "clear" | "warn" | "critical" — see severity_of().
+ALERT_MIN = os.environ.get("NOC_ALERT_MIN", "warn").lower()
+# Set to 0 to disable pushing entirely (report still posts to GitHub).
+NOC_PUSH_ON = os.environ.get("NOC_PUSH", "1") != "0"
+
 
 def log(*a):
     print(*a, file=sys.stderr, flush=True)
@@ -448,10 +464,33 @@ def check_devices(now):
 
 
 # ------------------------------------------------------------------ report
-def build_report(now):
-    """Run every check and assemble the markdown comment body."""
+# Finding severities, worst-first. "clear" is the absence of findings.
+_SEV_ORDER = {"clear": 0, "warn": 1, "critical": 2}
+
+
+def build_findings(now):
+    """Run every check and return (findings, sections, verdict_text).
+
+    `findings` is a list of {kind, severity, text} — the machine-readable
+    version of the report, used to decide whether to push to the phone. The
+    markdown is built from the SAME run so the pushed summary and the posted
+    issue can never disagree.
+
+    severities:
+      critical — a datasource is down, or a device is offline NOW
+      warn     — a stale source, a recovered device drop, stale device data,
+                 unverifiable device health
+      (error-ish log lines are reported but do NOT drive the push: they are
+       common and not actionable on their own — matching the R0 posture of
+       reporting observations rather than crying wolf)
+    """
+    findings = []
     started = utc(now)
     health_ok, health_lines = check_health()
+    if not health_ok:
+        findings.append({"kind": "datasource", "severity": "critical",
+                         "text": "; ".join(l.lstrip("- ") for l in health_lines)
+                                 [:300]})
 
     jobs = list_jobs()
     if EXPECTED_JOBS:
@@ -480,6 +519,14 @@ def build_report(now):
                                  filter_expr="(?i)error|fail|panic|critical")
         err_rows.append((job, n, total, n_exact))
 
+    for job, age in stale:
+        txt = (f"{job}: no entries in the last 7 days" if age is None
+               else f"{job}: newest entry {age:.1f}h old (threshold {STALE_HOURS}h)")
+        findings.append({"kind": "stale_log", "severity": "warn", "text": txt})
+    for job in missing:
+        findings.append({"kind": "missing_source", "severity": "warn",
+                         "text": f"{job}: expected but absent from Loki"})
+
     buckets, bucket_lines = influx_buckets(now)
 
     # Network device health (the UDM/UniFi estate). The check the NOC lacked
@@ -488,7 +535,17 @@ def build_report(now):
         dev_ok, dev_lines, disconnected = check_devices(now)
     else:
         dev_ok, dev_lines, disconnected = True, ["- (device check disabled)"], None
+    # Distinguish device findings by severity: down NOW is critical (act now);
+    # a recovered drop or stale data is warn (worth knowing, not an emergency).
+    for ln in dev_lines:
+        t = ln.lstrip("- ").strip()
+        if t.startswith("✅") or t.startswith("(device check"):
+            continue
+        sev = "critical" if "disconnected NOW" in ln else "warn"
+        findings.append({"kind": "device", "severity": sev,
+                         "text": t.lstrip("⚠️🔴🟠❌").strip()[:300]})
 
+    # --- build the markdown (same run) ---
     out = []
     out.append(f"## NOC triage — {started}")
     out.append("")
@@ -550,9 +607,7 @@ def build_report(now):
     out.append("")
 
     # A one-line verdict, so the reader does not have to infer it.
-    problems = (len(stale) + len(missing) + (0 if health_ok else 1)
-                + (0 if dev_ok else 1))
-    if problems == 0 and not any_err:
+    if not findings and not any_err:
         out.append("**Verdict: all clear.** No stale sources, no datasource "
                    "failures, no disconnected devices, no error-ish lines in "
                    "the window.")
@@ -572,7 +627,85 @@ def build_report(now):
         if any_err:
             bits.append("error-ish lines present")
         out.append(f"**Verdict: attention needed** — {', '.join(bits)}.")
-    return "\n".join(out)
+    return findings, "\n".join(out)
+
+
+def build_report(now):
+    """Backwards-compatible: the markdown body only (used by the dry-run and
+    the existing tests). Prefer build_findings() when you also need the
+    machine-readable findings (alerting)."""
+    _findings, body = build_findings(now)
+    return body
+
+
+def worst_severity(findings):
+    """The single worst severity across findings, or "clear" when none."""
+    worst = "clear"
+    for f in findings or []:
+        if _SEV_ORDER.get(f.get("severity"), 0) > _SEV_ORDER[worst]:
+            worst = f["severity"]
+    return worst
+
+
+def should_alert(findings):
+    """Whether the phone should be buzzed: only when the worst finding meets
+    the configured floor. Default floor is "warn", so:
+      - all clear              -> no push (never wake someone for nothing)
+      - a stale background log -> pushed (a real finding, at the bridge's quiet
+                                  priority)
+      - a device down now      -> pushed as critical (bridge: siren)
+    """
+    return _SEV_ORDER.get(worst_severity(findings), 0) >= \
+        _SEV_ORDER.get(ALERT_MIN, 1)
+
+
+def push_alert(findings, body):
+    """Send one notification through the in-cluster pushover-bridge.
+
+    The bridge holds the Pushover credentials and expects a GRAFANA-SHAPED
+    webhook — so we speak that shape rather than invent a second contract.
+    NOC severity maps onto the bridge's vocabulary: a critical finding (a
+    datasource down, or a device offline NOW) leaves the severity label off so
+    the bridge uses the loud path; anything else is a quiet "warning".
+
+    Best-effort: never raises. A failed push must not fail the sweep or block
+    the report; the GitHub comment is the durable record either way.
+    """
+    if not NOC_PUSH_ON:
+        return {"sent": False, "reason": "disabled"}
+    if not should_alert(findings):
+        return {"sent": False, "reason": f"below floor ({ALERT_MIN})"}
+
+    worst = worst_severity(findings)
+    n = len(findings)
+    title = f"NOC: {n} finding{'s' if n != 1 else ''}"
+    # Message = the finding lines (each already carries its measured value).
+    # Truncated for the push; the full text is on the issue thread.
+    message = "\n".join(f"- {f['text']}" for f in findings)[:1000] or "(no findings)"
+
+    payload = {
+        "status": "firing",
+        "title": "AIOS NOC",
+        "alerts": [{
+            "status": "firing",
+            "labels": {
+                "alertname": title,
+                "service": "aios-noc",
+                # "warning" -> bridge sends a quiet push; omit for a critical
+                # finding so the bridge takes its default (siren) path.
+                **({} if worst == "critical" else {"severity": "warning"}),
+            },
+            "annotations": {"summary": message, "description": message},
+        }],
+    }
+    try:
+        http_json("POST", PUSHOVER_URL, {"Content-Type": "application/json"},
+                  payload, timeout=20)
+        log(f"pushover: sent ({worst}, {n} finding(s))")
+        return {"sent": True, "severity": worst, "count": n}
+    except Exception as exc:
+        log(f"pushover: FAILED ({str(exc)[:160]}) — report still posted")
+        return {"sent": False, "reason": str(exc)[:160]}
 
 
 # ------------------------------------------------------------------ github
@@ -606,14 +739,22 @@ def main():
     now = datetime.now(timezone.utc)
     log(f"aios-noc starting at {utc(now)}")
 
-    body = build_report(now)
+    findings, body = build_findings(now)
+    worst = worst_severity(findings)
+    log(f"findings: {len(findings)} (worst={worst})")
 
     if os.environ.get("NOC_DRY_RUN") == "1":
         print(body)
+        log(f"dry-run: would alert={should_alert(findings)} "
+            f"(floor {ALERT_MIN})")
         return 0
 
+    # Order matters: the ISSUE is the durable record, so post it FIRST. If the
+    # push then fails, the finding is still written down; if we pushed first and
+    # the comment failed, the alert would exist with no record to point at.
     token = github_install_token()
     post_comment(body, token)
+    push_alert(findings, body)
     return 0
 
 
