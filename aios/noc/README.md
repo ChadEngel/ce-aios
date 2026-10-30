@@ -22,6 +22,50 @@ reviewing observations rather than prose.
 | Log freshness | `query_loki_logs` (backward, limit 1) | a source that stopped shipping |
 | Error volume | `query_loki_stats` + `query_loki_logs` | error-ish lines in the window |
 | InfluxDB | `query_influxdb` (`buckets()`) | bucket set changed / query broken |
+| **Network devices** | `query_influxdb` (`subsystems`) | **a UniFi/UDM device offline** |
+
+### Network device health (added 2026-10-30)
+
+**Why it exists.** The UDM emails "device offline" alerts, but the NOC watched
+only *log/datasource* health — so a device dropping off the network was
+invisible to it. `unpoller` already records UniFi state into InfluxDB's
+`network_metrics` bucket, which this VK can read, so the fix is a query, not new
+plumbing.
+
+**The signal.** The controller's own `subsystems.num_disconnected` counter,
+read three ways:
+
+1. **Data freshness** — newest sample age. If `unpoller` stalls, the counts are
+   stale and must not read as healthy.
+2. **Disconnected NOW** — max across subsystems of each series' newest point.
+3. **Disconnected in window** — max over the window, so a device that dropped
+   **and recovered between two sweeps** is still surfaced. This is the case that
+   matters for a twice-daily agent: a 20-minute outage at 08:10 is invisible to
+   a 06:15/18:15 schedule unless you ask the window.
+
+**Live example (2026-10-30, the motivating event):**
+
+```
+### Network devices (UDM / UniFi)
+- ✅ device data fresh (newest sample 0.0h old)
+- ✅ 0 device(s) disconnected now (tolerance 0)
+- 🟠 3 device(s) disconnected at some point in the last 24h — currently
+     recovered; check the UDM for which device and why
+```
+
+**Two traps, both pinned by the selftests:**
+
+- **`num_disconnected` is emitted PER SUBSYSTEM** (`lan`/`vpn`/`wan`/`wlan`/
+  `www`), not as one gauge. A plain `|> last()` picks an arbitrary series.
+- **Flux `max()`/`last()` return one row PER SERIES.** Reading `rows[0]`
+  reports the first series (observed `0`) while another series is the real,
+  worse value (observed `3`) — i.e. it would say "nothing happened" while
+  devices were down. The reader takes the max **across all rows**.
+
+**Limitation, stated honestly:** the MCP tool flattens result frames and drops
+tags, so the report cannot name *which* device dropped — only that the count
+went up. The line says "check the UDM for which". Naming devices needs the tag
+plumbing fixed in the query layer first.
 
 Output: a markdown comment on the NOC issue thread, with an explicit
 `All values measured at <UTC>` line and a one-line verdict. Timestamps are
@@ -64,6 +108,9 @@ cannot silently regress:
 | `NOC_STALE_HOURS` | `6` | silence that counts as stale |
 | `NOC_FILTER_LIMIT` | `500` | cap on filtered rows counted |
 | `NOC_EXPECTED_JOBS` | *(empty)* | explicit job list; empty = discover from Loki |
+| `NOC_DEVICES` | `1` | set `0` to skip the network-device check |
+| `NOC_MAX_DISCONNECTED` | `0` | how many simultaneously-offline devices are tolerated before it is a finding |
+| `NOC_DEVICE_STALE_HOURS` | `1` | device data older than this = `unpoller` stalled (counts untrustworthy) |
 | `NOC_LOKI_UID` / `NOC_INFLUX_UID` | `loki` / `dfdkew37wk1dse` | datasource UIDs |
 | `NOC_DRY_RUN` | — | `1` = print the report, post nothing |
 
@@ -106,9 +153,16 @@ Secret without it.
    the client assignment changes, every check fails loudly (not silently).
 6. **Issue-thread noise.** Twice-daily reports accumulate; the R0 window is
    ~28 comments. Fine for review, not a long-term home — see #17.
+7. **A device drops and recovers between sweeps.** A 20-minute outage is
+   invisible to a 06:15/18:15 schedule *unless* the window is queried. Mitigated
+   by the "disconnected at some point in the window" check; the report can say
+   *that* it happened but not *which* device (the MCP tool drops tags).
+8. **`unpoller` stalls.** Then `num_disconnected` stops updating and looks
+   healthy. Mitigated by the device-data freshness check — a stale count is
+   reported as untrustworthy, never as green.
 
 ## Test
 
 ```sh
-python3 aios/noc/selftest_noc.py     # 18 checks, no network
+python3 aios/noc/selftest_noc.py     # 41 checks, no network
 ```
