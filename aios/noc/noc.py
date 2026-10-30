@@ -67,6 +67,24 @@ MCP_TIMEOUT = int(os.environ.get("NOC_MCP_TIMEOUT", "60"))
 LOKI_UID = os.environ.get("NOC_LOKI_UID", "loki")
 INFLUX_UID = os.environ.get("NOC_INFLUX_UID", "dfdkew37wk1dse")
 
+# --- network device health (the UDM/UniFi estate) --------------------------
+# Why this exists (2026-10-30): the UDM emails "device offline" alerts, but the
+# NOC only watched LOG/DATASOURCE health, so a device dropping off the network
+# was invisible to it. unpoller records UniFi device state into InfluxDB's
+# network_metrics bucket (measurements usw/usg/uap + the subsystems rollup),
+# which this VK can already read — so this is a query, not new plumbing.
+#
+# The signal: subsystems.num_disconnected (the controller's own count of adopted
+# devices that are not connected). It is a purpose-built gauge, so we do not
+# have to infer health from raw `state` fields per model. Set NOC_MAX_DISCONNECTED
+# to how many simultaneously-offline devices are tolerated before it is a
+# finding (default 0 = any adopted device offline is worth flagging).
+NOC_DEVICES_ON = os.environ.get("NOC_DEVICES", "1") != "0"
+MAX_DISCONNECTED = int(os.environ.get("NOC_MAX_DISCONNECTED", "0"))
+# Devices silent in Influx longer than this mean unpoller itself stalled — which
+# would make "0 disconnected" a lie, so it is checked separately.
+DEVICE_DATA_STALE_HOURS = float(os.environ.get("NOC_DEVICE_STALE_HOURS", "1"))
+
 # Jobs expected to be shipping logs. Silence from any of these is a finding.
 # Empty = discover dynamically from Loki's `job` label values (the default),
 # which is self-maintaining but cannot report "a source that vanished
@@ -263,6 +281,172 @@ def influx_buckets(now):
     return names, [f"- {len(names)} bucket(s): {', '.join(sorted(names))}"]
 
 
+def _flux(query):
+    """Run one Flux query through the Influx datasource; return the rows list
+    (or []). One place to explain that the MCP tool flattens result frames and
+    drops tags, so every query below aggregates to a single value server-side."""
+    r = mcp("query_influxdb",
+            {"datasourceUid": INFLUX_UID, "dialect": "flux", "query": query})
+    return (r or {}).get("rows") or []
+
+
+def _num(row, *keys):
+    """First numeric value in a row, tried by key then by value scan. The tool
+    sometimes returns {column: value} and sometimes the Flux _value shape."""
+    for k in keys:
+        v = row.get(k)
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, (int, float)):
+            return v
+    for v in row.values():
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return v
+    return None
+
+
+def _max_num(rows):
+    """Max numeric value across ALL rows. Critical: Flux `|> max()` (and
+    `|> last()`) return one row PER SERIES (per subsystem tag), not one global
+    row — so reading rows[0] silently misses a worse value in another series.
+    Caught live: the windowed disconnect max returned rows [0,0,1,3,...] and
+    rows[0] alone would have reported 0 while a device was actually down."""
+    vals = [v for v in (_num(r) for r in rows) if v is not None]
+    return max(vals) if vals else None
+
+
+# The controller emits `num_disconnected` PER SUBSYSTEM (lan/vpn/wan/wlan/www),
+# not as one gauge — verified live 2026-10-30. So a plain `|> last()` picks an
+# arbitrary subsystem's row; the honest read of "is any device down?" is the
+# MAX across subsystems of each series' newest point.
+_DEVICE_FRESH_Q = (
+    'from(bucket:"network_metrics")\n'
+    '  |> range(start: -{h}h)\n'
+    '  |> filter(fn:(r) => r._measurement == "subsystems" and '
+    'r._field == "num_disconnected")\n'
+    '  |> group(columns:["subsystem"])\n'
+    '  |> last()\n'
+    '  |> group()\n'
+    '  |> max()')
+# Any disconnect in the window, even one that already recovered — catches a
+# device that dropped and came back BETWEEN two twice-daily sweeps.
+_DEVICE_WINDOW_Q = (
+    'from(bucket:"network_metrics")\n'
+    '  |> range(start: -{h}h)\n'
+    '  |> filter(fn:(r) => r._measurement == "subsystems" and '
+    'r._field == "num_disconnected")\n'
+    '  |> max()')
+
+
+def device_data_age_hours(now):
+    """Age (hours) of the newest device sample — is unpoller writing at all?
+    A stalled collector would make any disconnect count look healthy.
+
+    Age is measured against the caller's `now` (the report timestamp), not the
+    wall clock, so a report is internally consistent and the check is testable
+    with a fixed `now`."""
+    q = ('from(bucket:"network_metrics")\n'
+         '  |> range(start: -{h}h)\n'
+         '  |> filter(fn:(r) => r._measurement == "subsystems" and '
+         'r._field == "num_disconnected")\n'
+         '  |> group(columns:["subsystem"])\n'
+         '  |> last()\n'
+         '  |> group()\n'
+         '  |> max(column: "_time")').replace("{h}", str(int(WINDOW_HOURS)))
+    rows = _flux(q)
+    ts = None
+    for row in rows:
+        for k in ("_time", "Time"):
+            if row.get(k):
+                ts = row[k]
+                break
+        if ts:
+            break
+    if not ts:
+        return None
+    try:
+        ts2 = str(ts).replace("Z", "+00:00")
+        if "." in ts2:
+            head, frac = ts2.split(".", 1)
+            frac = "".join(ch for ch in frac if ch.isdigit())[:6]
+            ts2 = f"{head}.{frac}+00:00"
+        when = datetime.fromisoformat(ts2)
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        return (now - when).total_seconds() / 3600.0
+    except Exception:
+        return None
+
+
+def check_devices(now):
+    """Network device health from the UniFi/UDM estate (unpoller -> InfluxDB).
+    Returns (ok, [lines], worst_disconnected).
+
+    This is the check whose ABSENCE let the UDM's "device offline" alerts go
+    unreported (2026-10-30): the agent watched log/datasource health, never
+    device state. Three signals, all from the controller's own counters:
+      1. device DATA freshness — is unpoller writing? (else counts are lies)
+      2. disconnects NOW — max across subsystems of the latest sample
+      3. disconnects IN WINDOW — max over the window, so a device that dropped
+         and recovered between two sweeps is still surfaced
+    """
+    lines = []
+    try:
+        age = device_data_age_hours(now)
+    except Exception as exc:
+        return None, [f"- ❌ device-freshness query failed: {str(exc)[:200]}"], None
+
+    if age is None:
+        # No device data at all: unpoller down, dataset moved, or VK lost
+        # access. Never "healthy".
+        return False, ["- 🔴 no UniFi device data in InfluxDB "
+                       "(unpoller stalled, or the dataset moved?)"], None
+
+    ok = True
+    if age >= DEVICE_DATA_STALE_HOURS:
+        ok = False
+        lines.append(f"- 🟠 device data stale: newest sample {age:.1f}h old "
+                     f"(threshold {DEVICE_DATA_STALE_HOURS}h) — unpoller may "
+                     f"have stalled; counts below are not trustworthy")
+    else:
+        lines.append(f"- ✅ device data fresh (newest sample {age:.1f}h old)")
+
+    now_n = window_n = None
+    try:
+        rows = _flux(_DEVICE_FRESH_Q.format(h=int(WINDOW_HOURS)))
+        now_n = _max_num(rows)
+    except Exception as exc:
+        lines.append(f"- ⚠️ current-disconnect query failed: {str(exc)[:120]}")
+    try:
+        rows = _flux(_DEVICE_WINDOW_Q.format(h=int(WINDOW_HOURS)))
+        window_n = _max_num(rows)
+    except Exception as exc:
+        lines.append(f"- ⚠️ window-disconnect query failed: {str(exc)[:120]}")
+
+    if now_n is None and window_n is None:
+        ok = False
+        lines.append("- 🔴 could not read any disconnect counter")
+        return ok, lines, None
+
+    worst = max(x for x in (now_n, window_n) if x is not None)
+    if now_n is not None:
+        if int(now_n) > MAX_DISCONNECTED:
+            ok = False
+            lines.append(f"- 🔴 **{int(now_n)} device(s) disconnected NOW** "
+                         f"(tolerance {MAX_DISCONNECTED})")
+        else:
+            lines.append(f"- ✅ {int(now_n)} device(s) disconnected now "
+                         f"(tolerance {MAX_DISCONNECTED})")
+    if window_n is not None and int(window_n) > MAX_DISCONNECTED:
+        # Distinct finding: nothing is down right now, but something WAS —
+        # the exact case that between-sweep drops hide.
+        ok = False
+        lines.append(f"- 🟠 **{int(window_n)} device(s) disconnected at some "
+                     f"point in the last {int(WINDOW_HOURS)}h** — currently "
+                     f"recovered; check the UDM for which device and why")
+    return ok, lines, worst
+
+
 # ------------------------------------------------------------------ report
 def build_report(now):
     """Run every check and assemble the markdown comment body."""
@@ -297,6 +481,13 @@ def build_report(now):
         err_rows.append((job, n, total, n_exact))
 
     buckets, bucket_lines = influx_buckets(now)
+
+    # Network device health (the UDM/UniFi estate). The check the NOC lacked
+    # when "device offline" alerts went unnoticed (2026-10-30).
+    if NOC_DEVICES_ON:
+        dev_ok, dev_lines, disconnected = check_devices(now)
+    else:
+        dev_ok, dev_lines, disconnected = True, ["- (device check disabled)"], None
 
     out = []
     out.append(f"## NOC triage — {started}")
@@ -354,11 +545,17 @@ def build_report(now):
     out.extend(bucket_lines)
     out.append("")
 
+    out.append("### Network devices (UDM / UniFi)")
+    out.extend(dev_lines)
+    out.append("")
+
     # A one-line verdict, so the reader does not have to infer it.
-    problems = len(stale) + len(missing) + (0 if health_ok else 1)
+    problems = (len(stale) + len(missing) + (0 if health_ok else 1)
+                + (0 if dev_ok else 1))
     if problems == 0 and not any_err:
         out.append("**Verdict: all clear.** No stale sources, no datasource "
-                   "failures, no error-ish lines in the window.")
+                   "failures, no disconnected devices, no error-ish lines in "
+                   "the window.")
     else:
         bits = []
         if not health_ok:
@@ -367,6 +564,11 @@ def build_report(now):
             bits.append(f"{len(stale)} stale/absent source(s)")
         if missing:
             bits.append(f"{len(missing)} expected source(s) missing")
+        if not dev_ok:
+            if disconnected:
+                bits.append(f"{int(disconnected)} device(s) disconnected")
+            else:
+                bits.append("device health unverifiable")
         if any_err:
             bits.append("error-ish lines present")
         out.append(f"**Verdict: attention needed** — {', '.join(bits)}.")

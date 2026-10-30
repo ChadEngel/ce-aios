@@ -37,7 +37,7 @@ spec:
             kubernetes.io/arch: amd64
           containers:
             - name: noc
-              image: caehomelab/aios-noc:0.1.0
+              image: caehomelab/aios-noc:0.1.1
               imagePullPolicy: Never
               envFrom:
                 - secretRef:
@@ -55,6 +55,16 @@ spec:
                   value: "24"
                 - name: NOC_STALE_HOURS
                   value: "6"
+                # Network-device health (UniFi/UDM via unpoller -> InfluxDB).
+                # This is the check added after the UDM's own "device offline"
+                # alerts went unreported (2026-10-30). Tolerance 0 = any adopted
+                # device offline at any point in the window is a finding.
+                - name: NOC_DEVICES
+                  value: "1"
+                - name: NOC_MAX_DISCONNECTED
+                  value: "0"
+                - name: NOC_DEVICE_STALE_HOURS
+                  value: "1"
               resources:
                 requests:
                   memory: 64Mi

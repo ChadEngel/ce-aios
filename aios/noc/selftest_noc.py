@@ -61,6 +61,54 @@ BUCKETS = {"columns": ["name", "id"], "rows": [
     {"id": "a", "name": "host_metrics"}, {"id": "b", "name": "kube_metrics"},
 ]}
 
+# Device-health Flux goes through the SAME query_influxdb tool as buckets(), so
+# fakes must dispatch on the query text. These builders mimic the real tool's
+# shapes, including the traps found live:
+#   * `|> max()` / `|> last()` return one row PER SERIES (subsystem), so a
+#     correct reader takes the max across ALL rows — a fake that returns a
+#     single row would hide that bug.
+#   * `Time` is RFC3339 with nanosecond precision.
+# Timestamp is fixed just before NOW so "fresh" holds: age is measured against
+# the report's `now`, so a hard-coded date would read as years stale.
+_DEV_TS = "2026-10-27T11:59:30.123456789Z"
+
+
+def dev_fresh(n):
+    """Newest-sample max rows: one per subsystem, value n (all equal is the
+    normal case — the controller repeats the same count per subsystem)."""
+    return {"columns": ["Time", "num_disconnected"], "rows":
+            [{"Time": _DEV_TS, "num_disconnected": n} for _ in range(5)]}
+
+
+def dev_window(*per_series):
+    """Windowed max rows: one per series. A test can pass a lower first value
+    to prove the reader does not just take rows[0]."""
+    return {"columns": ["Time", "num_disconnected"], "rows":
+            [{"Time": _DEV_TS, "num_disconnected": v} for v in per_series]}
+
+
+def influx_dispatch(buckets=BUCKETS, fresh=None, window=None, *_a, **_k):
+    """query_influxdb fake that routes by Flux content, so one fake serves
+    buckets() AND the device queries.
+
+    Routing is by exact Flux shape, not a guessed substring:
+      * the FRESHNESS query ends `|> max(column: "_time")`
+      * the NOW query ends `|> max()` after a `group(columns:)`
+      * the WINDOW query is a bare `|> max()`
+    """
+    def _r(args):
+        q = args.get("query", "")
+        if q.strip().startswith("buckets()"):
+            return buckets
+        if "max(column:" in q:                       # freshness (age) query
+            return fresh if fresh is not None else dev_fresh(0)
+        if "num_disconnected" in q and "|> max()" in q and "group(columns:" in q:
+            return fresh if fresh is not None else dev_fresh(0)
+        if "num_disconnected" in q and "max()" in q:
+            return window if window is not None else dev_window(0)
+        return buckets
+    return _r
+
 
 def loki_stats(entries):
     return {"streams": 1 if entries else 0, "chunks": entries,
@@ -100,7 +148,7 @@ fake_mcp({
     "list_loki_label_values": ["udm-syslog"],
     "query_loki_logs": loki_logs(newest_hours=0.5, error_rows=0),
     "query_loki_stats": loki_stats(100),
-    "query_influxdb": BUCKETS,
+    "query_influxdb": influx_dispatch(),
 })
 body = noc.build_report(NOW)
 check("happy path says all clear", "all clear" in body.lower(), body[-160:])
@@ -112,7 +160,7 @@ fake_mcp({
     "list_loki_label_values": ["udm-syslog"],
     "query_loki_logs": loki_logs(newest_hours=116.8),
     "query_loki_stats": loki_stats(0),
-    "query_influxdb": BUCKETS,
+    "query_influxdb": influx_dispatch(),
 })
 body = noc.build_report(NOW)
 check("stale source flagged", "🟠" in body and "udm-syslog" in body, body)
@@ -129,7 +177,7 @@ fake_mcp({
     "list_loki_label_values": ["ghost"],
     "query_loki_logs": loki_logs(newest_hours=None),
     "query_loki_stats": loki_stats(0),
-    "query_influxdb": BUCKETS,
+    "query_influxdb": influx_dispatch(),
 })
 body = noc.build_report(NOW)
 check("absent source is 🔴 not 🟠", "🔴" in body and "no entries in the last 7 days" in body, body)
@@ -140,7 +188,7 @@ fake_mcp({
     "list_loki_label_values": ["udm-syslog"],
     "query_loki_logs": loki_logs(newest_hours=0.2, error_rows=0),
     "query_loki_stats": loki_stats(10),
-    "query_influxdb": BUCKETS,
+    "query_influxdb": influx_dispatch(),
 })
 body = noc.build_report(NOW)
 check("unhealthy datasource flagged", "❌ Loki" in body, body)
@@ -154,7 +202,7 @@ calls = fake_mcp({
     "list_loki_label_values": ["udm-syslog"],
     "query_loki_logs": loki_logs(newest_hours=0.1, error_rows=3),
     "query_loki_stats": loki_stats(50),
-    "query_influxdb": BUCKETS,
+    "query_influxdb": influx_dispatch(),
 })
 noc.build_report(NOW)
 stats_logql = [a["logql"] for n, a in calls if n == "query_loki_stats"]
@@ -205,6 +253,113 @@ check("report is timestamped", "All values measured at" in body, body[:200])
 # 10. the report never claims to have written anything (R0 posture)
 check("report is read-only in wording",
       "move" not in body.lower() and "delete" not in body.lower(), body)
+
+# --- 11. network device health (the UDM/UniFi estate) ----------------------
+# This whole section exists because the NOC once watched ONLY log/datasource
+# health, so the UDM's "device offline" alerts never appeared in a report.
+# Pin every behaviour that makes this check trustworthy.
+
+# 11a. healthy: fresh data, nothing disconnected -> all clear
+fake_mcp({
+    "check_datasources_health": HEALTH_OK,
+    "list_loki_label_values": ["udm-syslog"],
+    "query_loki_logs": loki_logs(newest_hours=0.5),
+    "query_loki_stats": loki_stats(100),
+    "query_influxdb": influx_dispatch(fresh=dev_fresh(0), window=dev_window(0)),
+})
+body = noc.build_report(NOW)
+check("devices healthy -> all clear", "all clear" in body.lower(), body[-200:])
+check("device section present", "### Network devices" in body, body)
+check("0 disconnected now shown ✅",
+      "✅ 0 device(s) disconnected now" in body, body)
+
+# 11b. THE rows[0] TRAP: Flux max()/last() return one row PER SERIES. A reader
+#      that takes rows[0] reports the FIRST series (here 0) while another
+#      series (here 3) is the real, worse value. Live 2026-10-30 the windowed
+#      max was [0,0,1,3,0,...]; rows[0] would have said "nothing happened"
+#      while 3 devices were down. Pin that the MAX ACROSS ROWS is taken.
+fake_mcp({
+    "check_datasources_health": HEALTH_OK,
+    "list_loki_label_values": ["udm-syslog"],
+    "query_loki_logs": loki_logs(newest_hours=0.5),
+    "query_loki_stats": loki_stats(100),
+    "query_influxdb": influx_dispatch(fresh=dev_fresh(0),
+                                      window=dev_window(0, 0, 1, 3, 0)),
+})
+body = noc.build_report(NOW)
+check("rows[0]=0 but another series=3 -> catches the 3", "**3 device(s)**" in body
+      or "3 device(s) disconnected at some point" in body, body)
+check("rows[0] trap drives attention", "attention needed" in body.lower(), body)
+
+# 11c. devices down RIGHT NOW -> 🔴 and attention
+fake_mcp({
+    "check_datasources_health": HEALTH_OK,
+    "list_loki_label_values": ["udm-syslog"],
+    "query_loki_logs": loki_logs(newest_hours=0.5),
+    "query_loki_stats": loki_stats(100),
+    "query_influxdb": influx_dispatch(fresh=dev_fresh(2), window=dev_window(2)),
+})
+body = noc.build_report(NOW)
+check("device down now is 🔴", "🔴 **2 device(s) disconnected NOW**" in body, body)
+check("device down drives attention", "attention needed" in body.lower(), body)
+check("device down named in the verdict", "2 device(s) disconnected" in body, body)
+
+# 11d. a between-sweep drop (down then recovered) is still surfaced — the
+#      EXACT case that hid a real UDM event from a twice-daily sweep.
+fake_mcp({
+    "check_datasources_health": HEALTH_OK,
+    "list_loki_label_values": ["udm-syslog"],
+    "query_loki_logs": loki_logs(newest_hours=0.5),
+    "query_loki_stats": loki_stats(100),
+    "query_influxdb": influx_dispatch(fresh=dev_fresh(0), window=dev_window(1)),
+})
+body = noc.build_report(NOW)
+check("recovered drop is still flagged",
+      "disconnected at some point in the last" in body, body)
+check("recovered drop drives attention", "attention needed" in body.lower(), body)
+
+# 11e. stale device DATA: unpoller stopped -> counts untrustworthy, not "healthy"
+_old_ts = "2026-10-27T06:00:00.000000000Z"   # ~6h before NOW
+fake_mcp({
+    "check_datasources_health": HEALTH_OK,
+    "list_loki_label_values": ["udm-syslog"],
+    "query_loki_logs": loki_logs(newest_hours=0.5),
+    "query_loki_stats": loki_stats(100),
+    "query_influxdb": influx_dispatch(
+        fresh={"columns": ["Time", "num_disconnected"],
+               "rows": [{"Time": _old_ts, "num_disconnected": 0}]},
+        window=dev_window(0)),
+})
+body = noc.build_report(NOW)
+check("stale device data flagged", "device data stale" in body, body)
+check("stale device data drives attention", "attention needed" in body.lower(), body)
+
+# 11f. NO device data at all -> never "healthy"
+fake_mcp({
+    "check_datasources_health": HEALTH_OK,
+    "list_loki_label_values": ["udm-syslog"],
+    "query_loki_logs": loki_logs(newest_hours=0.5),
+    "query_loki_stats": loki_stats(100),
+    "query_influxdb": influx_dispatch(
+        fresh={"columns": [], "rows": []}, window={"columns": [], "rows": []}),
+})
+body = noc.build_report(NOW)
+check("no device data is 🔴, not all-clear",
+      "no UniFi device data" in body and "all clear" not in body.lower(), body)
+
+# 11g. the check can be turned off wholesale (NOC_DEVICES=0)
+_saved = noc.NOC_DEVICES_ON
+noc.NOC_DEVICES_ON = False
+fake_mcp({
+    "check_datasources_health": HEALTH_OK,
+    "list_loki_label_values": ["udm-syslog"],
+    "query_loki_logs": loki_logs(newest_hours=0.5),
+    "query_loki_stats": loki_stats(100),
+    "query_influxdb": influx_dispatch(),
+})
+body = noc.build_report(NOW)
+noc.NOC_DEVICES_ON = _saved
+check("device check can be disabled", "device check disabled" in body, body)
 
 print()
 if FAILS:
