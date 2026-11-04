@@ -23,6 +23,51 @@ reviewing observations rather than prose.
 | Error volume | `query_loki_stats` + `query_loki_logs` | error-ish lines in the window |
 | InfluxDB | `query_influxdb` (`buckets()`) | bucket set changed / query broken |
 | **Network devices** | `query_influxdb` (`subsystems`) | **a UniFi/UDM device offline** |
+| **Alert delivery** | `pushover-bridge` (in-cluster) | **findings reach your phone, not just the issue** |
+
+### Alert delivery (added 2026-10-30)
+
+**Why.** The NOC posted ONLY to the GitHub issue, so findings sat unread —
+including its own long-running `udm-syslog stale` line. A check nobody sees is
+not a check.
+
+**How.** On a sweep whose worst finding meets `NOC_ALERT_MIN` (default `warn`),
+the agent POSTs a **Grafana-shaped alert** to the in-cluster `pushover-bridge`,
+which relays it to Pushover for iOS. Two design choices worth stating:
+
+- **The bridge owns the Pushover credentials**, so the NOC holds no Pushover
+  secrets — it only needs the in-cluster URL. This also means we reuse the
+  bridge's existing **Grafana webhook contract** rather than inventing a second
+  one.
+- **Severity maps onto the bridge's behaviour:** a *critical* finding
+  (datasource down, or a device offline **now**) omits the severity label so the
+  bridge takes its default path = `priority: 1` + **siren** (bypasses quiet
+  hours). Everything else sends `severity: warning` = a quiet push. So a device
+  offline at 3am wakes you; a stale background log does not.
+
+**Ordering:** the GitHub comment is posted **first**, then the push. The issue
+is the durable record; if the push fails the finding is still written down.
+
+**Thresholds (`NOC_ALERT_MIN`):**
+
+| Value | Pushes on |
+|---|---|
+| `warn` (default) | any warn-or-worse finding: stale/missing source, recovered device drop, stale device data, datasource down, device down now |
+| `critical` | only a datasource down or a device offline **now** |
+| `clear` | nothing — effectively disables pushing |
+
+`NOC_PUSH=0` disables pushing entirely (the report still posts). A failed push
+**never** raises and never blocks the report.
+
+**What does NOT push:** an all-clear sweep (never wake someone for nothing) and,
+by design, error-ish log volume on its own — that is common and not actionable,
+so it is reported but does not buzz the phone.
+
+**NetworkPolicy:** the bridge is a ClusterIP on the pod network
+(`10.43.x:8080`), not 443 and not public, so the NOC's egress policy has an
+explicit rule for it. Without that rule the push silently fails while the issue
+still posts — an invisible loss unless the path is tested (it is, in-cluster,
+live).
 
 ### Network device health (added 2026-10-30)
 
@@ -111,24 +156,27 @@ cannot silently regress:
 | `NOC_DEVICES` | `1` | set `0` to skip the network-device check |
 | `NOC_MAX_DISCONNECTED` | `0` | how many simultaneously-offline devices are tolerated before it is a finding |
 | `NOC_DEVICE_STALE_HOURS` | `1` | device data older than this = `unpoller` stalled (counts untrustworthy) |
+| `NOC_PUSH` | `1` | `0` disables Pushover delivery (report still posts) |
+| `NOC_ALERT_MIN` | `warn` | min severity that pushes: `warn` \| `critical` \| `clear` |
+| `NOC_PUSHOVER_URL` | `http://pushover-bridge:8080` | the in-cluster relay |
 | `NOC_LOKI_UID` / `NOC_INFLUX_UID` | `loki` / `dfdkew37wk1dse` | datasource UIDs |
 | `NOC_DRY_RUN` | — | `1` = print the report, post nothing |
 
 ## Rollout
 
-| Step | Who | State |
-|---|---|---|
-| Tool plane (`mcp-grafana` read-only, 20 tools) | — | ✅ done (#30/#31) |
-| `aios-noc` VK + `grafana_noc` client | — | ✅ live |
-| Agent + manifests | assistant | ✅ this PR |
-| **`BIFROST_VK_AIOS_NOC` into Infisical** | **human** | ⬜ **required before apply** |
-| Image import to k3s + apply | assistant | ⬜ |
-| R0 window (2 weeks of reports) → "hired" decision | agent → Chad | ⬜ |
+| Step | State |
+|---|---|
+| Tool plane (`mcp-grafana` read-only, 20 tools) | ✅ done (#30/#31) |
+| `aios-noc` VK + `grafana_noc` client | ✅ live |
+| Agent + manifests | ✅ merged (#82), source in git |
+| `BIFROST_VK_AIOS_NOC` in Infisical | ✅ live |
+| Image import to k3s + apply | ✅ live (`aios-noc:0.1.2`) |
+| Network device-offline check | ✅ live (#87) |
+| Alert delivery via pushover-bridge | ✅ live (this change) |
+| R0 window (2 weeks of reports) → "hired" decision | ⬜ **current gate** |
 
-**The VK value currently lives only in Bifrost's `config.db`**, which does not
-survive a PVC rebuild. Putting it in Infisical (step 4) is what makes this hire
-declarative and recoverable — and the sync manifest will not render a non-empty
-Secret without it.
+**The VK value lives in Infisical** (`jarvis-jatg` / prod), synced by
+`aios-noc-secrets-sync` — so the hire is declarative and survives a PVC rebuild.
 
 ## Promotion gate (from `ai-it-team.md`)
 
@@ -160,9 +208,17 @@ Secret without it.
 8. **`unpoller` stalls.** Then `num_disconnected` stops updating and looks
    healthy. Mitigated by the device-data freshness check — a stale count is
    reported as untrustworthy, never as green.
+9. **An alert nobody reads.** The failure that motivated delivery: findings
+   posted only to issue #17 and were never seen. Now pushed to the phone on a
+   `warn`-or-worse finding. Residual risk: a broken push is *silent* (the sweep
+   still posts), so the path is exercised live and a failed push is logged loudly.
+10. **Alert fatigue.** If every sweep pushes, the phone gets ignored. Mitigated
+    by (a) never pushing on all-clear, (b) not pushing on error-ish log volume
+    alone, and (c) the `NOC_ALERT_MIN=critical` setting for "only wake me for
+    something down right now".
 
 ## Test
 
 ```sh
-python3 aios/noc/selftest_noc.py     # 41 checks, no network
+python3 aios/noc/selftest_noc.py     # 53 checks, no network
 ```

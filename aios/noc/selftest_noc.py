@@ -361,6 +361,99 @@ body = noc.build_report(NOW)
 noc.NOC_DEVICES_ON = _saved
 check("device check can be disabled", "device check disabled" in body, body)
 
+# --- 12. alert delivery (Pushover via the in-cluster bridge) ---------------
+# The NOC used to post ONLY to the GitHub issue, so findings sat unread. These
+# pin which findings reach the phone and which stay quiet.
+
+# 12a. severity aggregation and the alert floor
+check("no findings -> clear", noc.worst_severity([]) == "clear")
+check("worst of warn+critical -> critical",
+      noc.worst_severity([{"severity": "warn"}, {"severity": "critical"}]) == "critical")
+check("all-clear never alerts", noc.should_alert([]) is False)
+check("a warn finding alerts (floor=warn)",
+      noc.should_alert([{"severity": "warn"}]) is True)
+_saved_floor = noc.ALERT_MIN
+noc.ALERT_MIN = "critical"
+check("floor=critical silences a warn-only sweep",
+      noc.should_alert([{"severity": "warn"}]) is False)
+check("floor=critical still alerts on critical",
+      noc.should_alert([{"severity": "critical"}]) is True)
+noc.ALERT_MIN = _saved_floor
+
+# 12b. an all-clear sweep must NOT push (never wake someone for nothing)
+fake_mcp({
+    "check_datasources_health": HEALTH_OK,
+    "list_loki_label_values": ["udm-syslog"],
+    "query_loki_logs": loki_logs(newest_hours=0.5),
+    "query_loki_stats": loki_stats(100),
+    "query_influxdb": influx_dispatch(fresh=dev_fresh(0), window=dev_window(0)),
+})
+findings, body = noc.build_findings(NOW)
+check("healthy sweep yields no findings", findings == [], findings)
+_sent = {}
+noc.http_json = lambda *a, **k: _sent.setdefault("called", True)
+res = noc.push_alert(findings, body)
+check("all-clear does not push", res["sent"] is False and "called" not in _sent, (res, _sent))
+
+# 12c. a device-down-now finding pushes, as the LOUD path (no severity label)
+fake_mcp({
+    "check_datasources_health": HEALTH_OK,
+    "list_loki_label_values": ["udm-syslog"],
+    "query_loki_logs": loki_logs(newest_hours=0.5),
+    "query_loki_stats": loki_stats(100),
+    "query_influxdb": influx_dispatch(fresh=dev_fresh(2), window=dev_window(2)),
+})
+findings, body = noc.build_findings(NOW)
+check("device-down is a critical finding",
+      noc.worst_severity(findings) == "critical", findings)
+captured = {}
+def _cap(method, url, headers, payload=None, timeout=90):
+    captured["url"] = url
+    captured["payload"] = payload
+    return {"ok": True}
+noc.http_json = _cap
+res = noc.push_alert(findings, body)
+check("device-down pushes", res["sent"] is True, res)
+check("push goes to the bridge URL",
+      captured.get("url", "").startswith(noc.PUSHOVER_URL), captured.get("url"))
+_check_alert = captured["payload"]["alerts"][0]
+check("critical omits the severity label (bridge uses siren)",
+      "severity" not in _check_alert["labels"], _check_alert["labels"])
+check("push message carries the measured finding",
+      "disconnected" in _check_alert["annotations"]["summary"],
+      _check_alert["annotations"])
+
+# 12d. a warn-only finding pushes at the QUIET path (severity: warning)
+fake_mcp({
+    "check_datasources_health": HEALTH_OK,
+    "list_loki_label_values": ["udm-syslog"],
+    "query_loki_logs": loki_logs(newest_hours=116.8),
+    "query_loki_stats": loki_stats(0),
+    "query_influxdb": influx_dispatch(),
+})
+findings, body = noc.build_findings(NOW)
+check("stale source is a warn finding",
+      noc.worst_severity(findings) == "warn", findings)
+captured.clear()
+res = noc.push_alert(findings, body)
+check("warn-only pushes", res["sent"] is True, res)
+check("warn uses the quiet severity label",
+      captured["payload"]["alerts"][0]["labels"].get("severity") == "warning",
+      captured["payload"]["alerts"][0]["labels"])
+
+# 12e. pushing can be disabled; a push failure must NEVER raise
+_saved_push = noc.NOC_PUSH_ON
+noc.NOC_PUSH_ON = False
+res = noc.push_alert(findings, body)
+noc.NOC_PUSH_ON = _saved_push
+check("push can be disabled", res["sent"] is False and res["reason"] == "disabled", res)
+
+def _push_boom(*a, **k):
+    raise RuntimeError("bridge unreachable")
+noc.http_json = _push_boom
+res = noc.push_alert(findings, body)
+check("a failed push does not raise", res["sent"] is False, res)
+
 print()
 if FAILS:
     print(f"FAILED: {len(FAILS)} — {', '.join(FAILS)}")

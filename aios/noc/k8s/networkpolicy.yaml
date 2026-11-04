@@ -44,3 +44,18 @@ spec:
       ports:
         - protocol: TCP
           port: 443
+    # Alert delivery: the in-cluster pushover-bridge, which relays findings to
+    # the phone. A ClusterIP Service on the pod network (10.43.x:8080) — NOT
+    # 443 and NOT public, so it needs its own rule. Without this the push
+    # silently fails while the sweep still posts the issue, so the loss is
+    # invisible unless someone checks the phone.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ai
+          podSelector:
+            matchLabels:
+              app: pushover-bridge
+      ports:
+        - protocol: TCP
+          port: 8080
