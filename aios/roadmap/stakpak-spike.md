@@ -38,10 +38,9 @@ works, then decide whether/how it maps to work. Tracked in issue **#92**.
 
 ## Setup checklist (Chad runs on the Studio; agent sessions have no SSH path to it)
 
-- [ ] `curl -sSL https://stakpak.dev/install.sh | sh` (or `brew install stakpak`)
-- [ ] `~/.stakpak/config.toml` offline profile → `http://192.168.30.10:11434/v1`,
-      model `offline/qwen3.8:latest` to start (compare with `ollama/muse-glimmer`)
-- [ ] `~/.stakpak/` private: not in iCloud/Drive/Time-Machine-shared paths, not in any repo
+- [x] Install — `v0.3.88` binary from GitHub releases (`stakpak-darwin-aarch64.tar.gz`) → `~/.local/bin/stakpak` (homebrew tap needs `brew trust`; direct release simpler)
+- [x] `~/.stakpak/config.toml` offline profile → `http://127.0.0.1:11434/v1`, model `offline/qwen3.8:latest`; dir `chmod 700`, file `600`
+- [x] No Stakpak account: `stakpak account` → `local@stakpak.dev` (ID `local`) — **confirmed keyless OSS works**
 - [ ] Read `docs/how-it-works/warden-guardrails.md`, then start Warden before any real task
 - [ ] First tasks R0 read-only: GitHub issue listing via `gh`, Loki queries via curl,
       `kubectl -n ai get` read-only — same posture as the NOC agent
@@ -49,7 +48,14 @@ works, then decide whether/how it maps to work. Tracked in issue **#92**.
 
 ## Findings log
 
-(append here as the trial runs)
+**2026-11-05 (agent-driven via SSH to aiserver.home, creds from Infisical `AISERVER_USER`/`AISERVER_PASS`, never printed):**
+
+- Installed Stakpak **0.3.88** to `~/.local/bin/stakpak` on aiserver.home (arm64, macOS 26.6.2). Homebrew tap `stakpak/stakpak` exists but refuses as untrusted; direct GitHub release download is the clean path.
+- Offline profile works against local Ollama. Smoke test `stakpak --profile offline --async --max-steps N '<prompt>'` runs non-interactively and prints a Final Agent Response: `STAKPAK_OK` from `offline/qwen3.8:latest` (15.7k prompt / 44 completion tokens).
+- Real R0 task succeeded: agent ran a curl against `:11434/api/tags`, corrected a broken one-liner itself, and reported **3 local (muse-glimmer, qwen3.8, qwen3.6), 3 cloud-pulled (`:cloud` suffix)** models. ~49k tokens total for that task — qwen3.8 pulled a big system prompt; token cost is local so irrelevant, but latency on 96GB Studio is fine.
+- `stakpak account` = `local` — no Stakpak API key, no cloud login. `~/.stakpak/config.toml` gained a `readonly.warden` profile with `enabled = true` and volume mounts (incl. `~/.ssh`, `~/.kube`, cloud cred dirs as `:ro`) — Warden's container-wrap profile; **the TUI did not auto-wrap my run**, so for real tasks use `stakpak warden wrap` explicitly.
+- `config.toml` still contains `api_endpoint = "https://apiv2.stakpak.dev"` at the profile level even in local mode — worth checking whether anything actually calls it (Registry rulebook fetches are the documented exception); watch egress in the trial.
+- Sessions persist locally under `~/.stakpak/session/` (SQLite + messages.json) — local audit log as documented.
 
 ## Work-side evaluation gate (separate decision, later)
 
